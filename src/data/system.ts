@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS: Settings = {
   wallpaper: 'aurora',
   density: 'comfortable',
   reduceMotion: false,
+  timeFormat: '24',
   hostname: 'orion-node',
   language: 'en-US',
   timezone: 'America/New_York',

@@ -78,6 +78,7 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
     files,
     storage,
     users,
+    settings,
     addFolder,
     addUploads,
     renameFile,
@@ -585,7 +586,9 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
                             {node.type === 'folder' ? '—' : formatBytes(node.size)}
                           </td>
                           <td className="file-table__modified">
-                            <time dateTime={node.modifiedAt}>{formatFullDateTime(node.modifiedAt)}</time>
+                            <time dateTime={node.modifiedAt}>
+                              {formatFullDateTime(node.modifiedAt, settings.timeFormat)}
+                            </time>
                           </td>
                           <td className="file-table__owner">
                             {owner ? (
@@ -766,7 +769,7 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
                 </div>
                 <div>
                   <dt>Modified</dt>
-                  <dd>{formatFullDateTime(activeNode.modifiedAt)}</dd>
+                  <dd>{formatFullDateTime(activeNode.modifiedAt, settings.timeFormat)}</dd>
                 </div>
                 <div>
                   <dt>Owner</dt>

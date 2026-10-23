@@ -40,6 +40,7 @@ import type {
   Density,
   SettingsTab,
   ThemeMode,
+  TimeFormat,
   UserAccount,
   Wallpaper,
 } from '../types'
@@ -582,6 +583,21 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                     options={[
                       { value: 'comfortable', label: 'Comfortable' },
                       { value: 'compact', label: 'Compact' },
+                    ]}
+                  />
+                </div>
+                <div className="setting-row">
+                  <div className="setting-row__copy">
+                    <strong>Time format</strong>
+                    <span>Applies to the dashboard clock and every timestamp.</span>
+                  </div>
+                  <Segmented<TimeFormat>
+                    label="Time format"
+                    value={settings.timeFormat}
+                    onChange={(timeFormat) => updateSettings({ timeFormat })}
+                    options={[
+                      { value: '12', label: '12-hour' },
+                      { value: '24', label: '24-hour' },
                     ]}
                   />
                 </div>

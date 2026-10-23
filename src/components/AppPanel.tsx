@@ -16,7 +16,7 @@ function hash(value: string) {
 }
 
 export function AppPanel({ app, onClose }: AppPanelProps) {
-  const { installed, toggleAppRunning, uninstallApp, pushToast } = useApp()
+  const { installed, toggleAppRunning, uninstallApp, pushToast, settings } = useApp()
   if (!app) return null
 
   const installedApp = installed[app.id]
@@ -132,7 +132,9 @@ export function AppPanel({ app, onClose }: AppPanelProps) {
         <div>
           <dt>Installed</dt>
           <dd>
-            {installedApp ? formatFullDateTime(installedApp.installedAt) : 'Not installed'}
+            {installedApp
+              ? formatFullDateTime(installedApp.installedAt, settings.timeFormat)
+              : 'Not installed'}
           </dd>
         </div>
         <div>

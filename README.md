@@ -21,6 +21,20 @@ npm run dev      # http://127.0.0.1:5173
 npm run build    # typecheck + production bundle
 ```
 
+### Container
+
+```bash
+docker build -t orion .
+docker run --rm -p 8080:80 orion   # http://localhost:8080
+```
+
+The image is a two-stage build: Node 24 compiles the bundle, nginx serves it with
+long-lived caching for hashed assets and a fallback to `index.html`.
+
+### Pages
+
+Every push to `main` deploys the site to https://innotelinc.github.io/orion/.
+
 ## Stack
 
 React 19, TypeScript, Vite, `lucide-react` icons, Space Grotesk (self-hosted via `@fontsource-variable`). No UI framework — the design system is hand-rolled CSS in `src/styles`, using the ZimaOS design DNA: 48px glass title bar, 310px widget rail, 5-column app grid, `rgba(53,54,58,.4)` frosted cards, blue `#0A63FF` accent.

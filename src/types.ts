@@ -3,6 +3,7 @@ export type ResolvedTheme = 'dark' | 'light'
 export type Accent = 'blue' | 'violet' | 'emerald' | 'amber'
 export type Wallpaper = 'aurora' | 'nebula' | 'dawn'
 export type Density = 'comfortable' | 'compact'
+export type TimeFormat = '12' | '24'
 
 export type RouteName = 'dashboard' | 'files' | 'apps' | 'storage' | 'settings'
 export type SettingsTab = 'general' | 'appearance' | 'network' | 'users' | 'security' | 'about'
@@ -126,6 +127,7 @@ export interface Settings {
   wallpaper: Wallpaper
   density: Density
   reduceMotion: boolean
+  timeFormat: TimeFormat
   hostname: string
   language: string
   timezone: string

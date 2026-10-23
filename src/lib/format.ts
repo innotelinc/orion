@@ -1,3 +1,5 @@
+import type { TimeFormat } from '../types'
+
 export function classNames(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ')
 }
@@ -48,7 +50,7 @@ export function formatDate(iso: string) {
   }).format(timestamp)
 }
 
-export function formatFullDateTime(iso: string) {
+export function formatFullDateTime(iso: string, timeFormat: TimeFormat = '24') {
   const timestamp = new Date(iso).getTime()
   if (Number.isNaN(timestamp)) return 'Unknown'
   return new Intl.DateTimeFormat('en-US', {
@@ -57,14 +59,16 @@ export function formatFullDateTime(iso: string) {
     year: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
+    hour12: timeFormat === '12',
   }).format(timestamp)
 }
 
-export function formatClock(date: Date) {
+export function formatClock(date: Date, timeFormat: TimeFormat = '24') {
   return new Intl.DateTimeFormat('en-US', {
-    hour: '2-digit',
+    // 12-hour clocks read better without a leading zero (7:40 PM, not 07:40 PM).
+    hour: timeFormat === '12' ? 'numeric' : '2-digit',
     minute: '2-digit',
-    hour12: false,
+    hour12: timeFormat === '12',
   }).format(date)
 }
 

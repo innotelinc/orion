@@ -96,6 +96,7 @@ function MetricRing({
 }
 
 function ClockCard() {
+  const { settings } = useApp()
   const [now, setNow] = useState(() => new Date())
 
   useEffect(() => {
@@ -110,7 +111,7 @@ function ClockCard() {
         <StatusBadge tone="success">Online</StatusBadge>
       </div>
       <time className="clock-card__time tabular" dateTime={now.toISOString()}>
-        {formatClock(now)}
+        {formatClock(now, settings.timeFormat)}
       </time>
       <p className="clock-card__date">{formatDay(now)}</p>
       <div className="clock-card__meta">
