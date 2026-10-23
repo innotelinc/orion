@@ -7,19 +7,21 @@ on:
 permissions:
   contents: read
 
+# Superseded pull request runs are noise; pushes are left alone so a Pages
+# deployment is never cancelled halfway through.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
@@ -30,3 +32,53 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Upload Pages artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build image
+        run: docker build --tag orion:ci .
+
+      - name: Check nginx config
+        run: docker run --rm --entrypoint nginx orion:ci -t
+
+      - name: Serve and probe
+        run: |
+          docker run --detach --name orion --publish 8080:80 orion:ci
+          for attempt in $(seq 1 20); do
+            curl --silent --fail --output /tmp/index.html http://127.0.0.1:8080/ && break
+            sleep 1
+          done
+          grep --quiet '<div id="root"></div>' /tmp/index.html
+          asset=$(grep --only-matching '/assets/[^"]*\.js' /tmp/index.html | head -1)
+          curl --silent --fail --output /dev/null --write-out "asset %{http_code}\n" "http://127.0.0.1:8080${asset}"
+          curl --silent --fail --output /dev/null --write-out "spa fallback %{http_code}\n" http://127.0.0.1:8080/files
+          docker logs orion
+          docker rm --force orion
+
+  deploy:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

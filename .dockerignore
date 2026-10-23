@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+.github
+.rea-evidence
+*.log
+.devserver.log
+*.tsbuildinfo
+README.md
+Dockerfile
+.dockerignore
