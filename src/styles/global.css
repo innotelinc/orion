@@ -678,6 +678,8 @@ kbd {
 
 .rail {
   position: sticky;
+  /* Own stacking context so hover tooltips always paint above view content. */
+  z-index: 45;
   top: calc(var(--titlebar-h) + 20px);
   height: calc(100vh - var(--titlebar-h) - 52px);
   min-height: 420px;
