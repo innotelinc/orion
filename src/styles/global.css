@@ -2172,3 +2172,23 @@ dialog.palette-dialog[open] {
     padding-right: 30px;
   }
 }
+
+/* API banner -------------------------------------------------------------- */
+
+.api-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  background: var(--danger-soft);
+  color: var(--text);
+  font-size: 11px;
+}
+.api-banner strong {
+  font-weight: 600;
+  margin-right: 6px;
+}

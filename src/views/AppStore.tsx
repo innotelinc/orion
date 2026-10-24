@@ -1,147 +1,73 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import {
-  ArrowRight,
-  Check,
-  Package,
-  Plus,
-  RefreshCw,
-  Search,
-  Star,
-  Trash2,
-  X,
-} from 'lucide-react'
-import { APP_CATALOG, categoryCount } from '../data/apps'
+import { useMemo, useState } from 'react'
+import { ArrowRight, Loader2, Play, RefreshCw, RotateCcw, Search, Square, X } from 'lucide-react'
+import { BUILTIN_APPS } from '../data/apps'
 import { useApp } from '../context/AppContext'
 import { classNames } from '../lib/format'
 import { AppIcon } from '../components/ui/AppIcon'
 import { EmptyState } from '../components/ui/EmptyState'
 import { Modal } from '../components/ui/Modal'
 import { PageHeader } from '../components/ui/PageHeader'
-import { ProgressBar } from '../components/ui/ProgressBar'
 import { StatusBadge } from '../components/ui/StatusBadge'
-import type { AppCategory, AppDefinition } from '../types'
+import type { ServiceAction, SystemService } from '../types'
 import type { NavigateOptions, RouteName } from '../hooks/useRoute'
 
 interface AppStoreProps {
   navigate: (name: RouteName, options?: NavigateOptions) => void
-  onLaunchApp: (app: AppDefinition) => void
 }
 
-export function AppStore({ navigate, onLaunchApp }: AppStoreProps) {
-  const { installed, installApp, uninstallApp, pushToast } = useApp()
-  const [category, setCategory] = useState<'All' | AppCategory>('All')
+export function AppStore({ navigate }: AppStoreProps) {
+  const { services, serviceAction, refresh, system, pushToast } = useApp()
   const [query, setQuery] = useState('')
-  const [installedOnly, setInstalledOnly] = useState(false)
-  const [progress, setProgress] = useState<Record<string, number>>({})
-  const [uninstallTarget, setUninstallTarget] = useState<AppDefinition | null>(null)
-  const timers = useRef<Record<string, number>>({})
-  const featured = APP_CATALOG.find((app) => app.featured) ?? APP_CATALOG[0]
-
-  useEffect(() => {
-    const activeTimers = timers.current
-    return () => {
-      Object.values(activeTimers).forEach((timer) => window.clearInterval(timer))
-    }
-  }, [])
+  const [runningOnly, setRunningOnly] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [confirmStop, setConfirmStop] = useState<SystemService | null>(null)
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    return APP_CATALOG.filter((app) => {
-      if (category !== 'All' && app.category !== category) return false
-      if (installedOnly && !installed[app.id]) return false
-      if (!needle) return true
-      return `${app.name} ${app.tagline} ${app.developer} ${app.category}`
-        .toLowerCase()
-        .includes(needle)
-    })
-  }, [category, installed, installedOnly, query])
-
-  const installedCount = Object.keys(installed).length
-
-  const startInstall = (app: AppDefinition) => {
-    if (installed[app.id] || progress[app.id] !== undefined) return
-    const started = Date.now()
-    setProgress((previous) => ({ ...previous, [app.id]: 2 }))
-    const timer = window.setInterval(() => {
-      const value = Math.min(100, Math.round(((Date.now() - started) / 1500) * 100))
-      setProgress((previous) => ({ ...previous, [app.id]: value }))
-      if (value >= 100) {
-        window.clearInterval(timer)
-        delete timers.current[app.id]
-        setProgress((previous) => {
-          const next = { ...previous }
-          delete next[app.id]
-          return next
-        })
-        installApp(app)
-      }
-    }, 90)
-    timers.current[app.id] = timer
-  }
-
-  const refresh = () => {
-    pushToast({
-      title: 'Catalog is up to date',
-      description: `${APP_CATALOG.length} apps · synced just now.`,
-      tone: 'success',
-    })
-  }
-
-  const renderInstallControl = (app: AppDefinition, featuredCard = false) => {
-    const isInstalled = Boolean(installed[app.id])
-    const installing = progress[app.id] !== undefined
-    if (installing) {
-      return (
-        <span className={classNames('store-installing', featuredCard && 'store-installing--featured')}>
-          <span className="store-installing__label">
-            Installing…
-            <strong>{progress[app.id]}%</strong>
-          </span>
-          <ProgressBar
-            value={progress[app.id]}
-            label={`Installing ${app.name}`}
-            tone="accent"
-          />
-        </span>
+    return services
+      .filter((service) => (runningOnly ? service.running : true))
+      .filter((service) =>
+        needle
+          ? `${service.name} ${service.description}`.toLowerCase().includes(needle)
+          : true,
       )
+      .sort((a, b) => {
+        if (a.running !== b.running) return a.running ? -1 : 1
+        return a.name.localeCompare(b.name)
+      })
+  }, [query, runningOnly, services])
+
+  const running = services.filter((service) => service.running).length
+
+  const critical = (service: SystemService) =>
+    service.name === 'nginx' || service.name === 'orion-api'
+
+  const act = async (service: SystemService, action: ServiceAction) => {
+    setBusy(service.id)
+    const result = await serviceAction(service.id, action)
+    setBusy(null)
+    if (!result.ok) {
+      pushToast({
+        title: `${action} failed for ${service.name}`,
+        description: result.error,
+        tone: 'error',
+      })
     }
-    if (isInstalled) {
-      return (
-        <button
-          type="button"
-          className={classNames('button', featuredCard && 'button--primary')}
-          onClick={() => onLaunchApp(app)}
-        >
-          Open
-          <ArrowRight size={14} aria-hidden="true" />
-        </button>
-      )
-    }
-    return (
-      <button
-        type="button"
-        className={classNames('button button--primary', featuredCard && 'button--lg')}
-        onClick={() => startInstall(app)}
-      >
-        <Plus size={15} aria-hidden="true" />
-        Install
-      </button>
-    )
   }
 
   return (
     <section className="view store-view">
       <PageHeader
-        eyebrow="Plug & play"
-        title="App Store"
-        description="Install a complete self-hosted service in one click. Orion wires up the container, network, storage and updates automatically."
+        eyebrow="systemd"
+        title="Services"
+        description="Every unit this container runs, read live. Restarting nginx or the API takes the desktop down for a moment — that is the real behaviour, not a simulation."
         actions={
           <>
             <span className="store-sync">
               <span className="live-dot" aria-hidden="true" />
-              Catalog synced
+              {running} of {services.length} running
             </span>
-            <button type="button" className="button" onClick={refresh}>
+            <button type="button" className="button" onClick={() => void refresh()}>
               <RefreshCw size={14} aria-hidden="true" />
               Refresh
             </button>
@@ -149,102 +75,39 @@ export function AppStore({ navigate, onLaunchApp }: AppStoreProps) {
         }
       />
 
-      <section
-        className="featured-card"
-        style={{ '--feature-accent': featured.accent } as CSSProperties}
-      >
-        <div className="featured-card__glow" aria-hidden="true" />
-        <div className="featured-card__copy">
-          <span className="featured-card__label">
-            <Star size={11} fill="currentColor" aria-hidden="true" />
-            Featured this week
-          </span>
-          <h2>{featured.name}</h2>
-          <p>{featured.description}</p>
-          <div className="featured-card__meta">
-            <span>{featured.category}</span>
-            <span>·</span>
-            <span>{featured.size}</span>
-            <span>·</span>
-            <span>
-              <Star size={11} fill="currentColor" aria-hidden="true" /> {featured.rating.toFixed(1)}
-            </span>
-            {installed[featured.id] ? (
-              <StatusBadge tone="success">Installed</StatusBadge>
-            ) : null}
-          </div>
-          <div className="featured-card__actions">
-            {renderInstallControl(featured, true)}
-            <button
-              type="button"
-              className="button button--ghost featured-card__learn"
-              onClick={() =>
-                pushToast({
-                  title: `${featured.name} by ${featured.developer}`,
-                  description: `${featured.tagline} · ${featured.downloads} installs.`,
-                  tone: 'info',
-                })
-              }
-            >
-              Learn more
-            </button>
-          </div>
-        </div>
-        <div className="featured-card__art" aria-hidden="true">
-          <span className="featured-card__ring featured-card__ring--one" />
-          <span className="featured-card__ring featured-card__ring--two" />
-          <AppIcon icon={featured.icon} accent={featured.accent} size="xl" />
-        </div>
-      </section>
-
       <div className="store-controls">
-        <div className="store-categories" role="tablist" aria-label="App categories">
-          {(['All', 'Media', 'Productivity', 'Monitoring', 'Security', 'Utilities', 'System'] as const).map(
-            (item) => (
-              <button
-                key={item}
-                type="button"
-                role="tab"
-                aria-selected={category === item}
-                className={classNames('store-chip', category === item && 'is-selected')}
-                onClick={() => {
-                  setCategory(item)
-                  setInstalledOnly(false)
-                }}
-              >
-                {item}
-                <span>{categoryCount(item)}</span>
-              </button>
-            ),
-          )}
-        </div>
-
-        <div className="store-controls__right">
+        <div className="store-categories" role="group" aria-label="View">
           <button
             type="button"
-            className={classNames('store-installed-filter', installedOnly && 'is-selected')}
-            aria-pressed={installedOnly}
-            onClick={() => setInstalledOnly((value) => !value)}
+            className={classNames('store-chip', !runningOnly && 'is-selected')}
+            aria-pressed={!runningOnly}
+            onClick={() => setRunningOnly(false)}
           >
-            <Check size={12} aria-hidden="true" />
-            Installed
-            <span>{installedCount}</span>
+            All units
+            <span>{services.length}</span>
           </button>
+          <button
+            type="button"
+            className={classNames('store-chip', runningOnly && 'is-selected')}
+            aria-pressed={runningOnly}
+            onClick={() => setRunningOnly(true)}
+          >
+            Running
+            <span>{running}</span>
+          </button>
+        </div>
+        <div className="store-controls__right">
           <label className="store-search">
             <Search size={14} aria-hidden="true" />
             <input
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search the catalog"
-              aria-label="Search app catalog"
+              placeholder="Search units"
+              aria-label="Search services"
             />
             {query ? (
-              <button
-                type="button"
-                aria-label="Clear search"
-                onClick={() => setQuery('')}
-              >
+              <button type="button" aria-label="Clear search" onClick={() => setQuery('')}>
                 <X size={12} aria-hidden="true" />
               </button>
             ) : null}
@@ -254,149 +117,177 @@ export function AppStore({ navigate, onLaunchApp }: AppStoreProps) {
 
       <div className="store-results-head">
         <div>
-          <h2>{installedOnly ? 'Installed apps' : category === 'All' ? 'All apps' : category}</h2>
+          <h2>Pages</h2>
+          <span>The desktop’s own views</span>
+        </div>
+      </div>
+
+      <div className="store-grid">
+        {BUILTIN_APPS.map((app) => (
+          <article key={app.id} className="store-card card">
+            <header className="store-card__head">
+              <AppIcon icon={app.icon} accent={app.accent} size="md" />
+              <div className="store-card__title">
+                <h3>{app.name}</h3>
+                <span>{app.tagline}</span>
+              </div>
+            </header>
+            <p className="store-card__tagline">{app.description}</p>
+            <footer className="store-card__footer">
+              <span className="store-category">Built in</span>
+              <div className="store-card__actions">
+                <button
+                  type="button"
+                  className="button button--sm"
+                  onClick={() => navigate(app.internalRoute, { path: app.internalPath })}
+                >
+                  Open
+                  <ArrowRight size={13} aria-hidden="true" />
+                </button>
+              </div>
+            </footer>
+          </article>
+        ))}
+      </div>
+
+      <div className="store-results-head">
+        <div>
+          <h2>Units</h2>
           <span>
-            {filtered.length} {filtered.length === 1 ? 'app' : 'apps'}
+            {filtered.length} {filtered.length === 1 ? 'unit' : 'units'}
             {query ? ` matching “${query}”` : ''}
           </span>
         </div>
-        <span className="dim store-results-head__hint">One-click installs include updates & backups</span>
+        <span className="dim store-results-head__hint">
+          systemd on {system?.runtime ?? 'this host'}
+        </span>
       </div>
 
       {filtered.length === 0 ? (
         <div className="card">
           <EmptyState
-            icon={Package}
-            title="No apps found"
-            description={
-              installedOnly
-                ? 'Install something from the catalog and it will appear here.'
-                : `Nothing matches “${query}”. Try a different name or category.`
-            }
+            icon={Search}
+            title="No units match"
+            description={`Nothing matches “${query}”. Clear the search to see every unit.`}
             action={
-              <button
-                type="button"
-                className="button"
-                onClick={() => {
-                  setQuery('')
-                  setCategory('All')
-                  setInstalledOnly(false)
-                }}
-              >
-                Reset filters
+              <button type="button" className="button" onClick={() => setQuery('')}>
+                Clear search
               </button>
             }
           />
         </div>
       ) : (
         <div className="store-grid">
-          {filtered.map((app) => {
-            const isInstalled = Boolean(installed[app.id])
-            const installing = progress[app.id] !== undefined
-            return (
-              <article key={app.id} className="store-card card">
-                <header className="store-card__head">
-                  <AppIcon icon={app.icon} accent={app.accent} size="md" />
-                  <div className="store-card__title">
-                    <h3>{app.name}</h3>
-                    <span>{app.developer}</span>
-                  </div>
-                  {isInstalled ? (
-                    <span className="store-card__installed" title="Installed">
-                      <Check size={12} aria-hidden="true" />
-                    </span>
-                  ) : null}
-                </header>
-                <p className="store-card__tagline">{app.tagline}</p>
-                <p className="store-card__description">{app.description}</p>
-                <div className="store-card__meta">
-                  <span>
-                    <Star size={11} fill="currentColor" aria-hidden="true" />
-                    {app.rating.toFixed(1)}
-                  </span>
-                  <span>{app.downloads}</span>
-                  <span>{app.size}</span>
+          {filtered.map((service) => (
+            <article key={service.id} className="store-card card">
+              <header className="store-card__head">
+                <AppIcon
+                  icon="Activity"
+                  accent={service.running ? '#10b981' : '#64748b'}
+                  size="md"
+                />
+                <div className="store-card__title">
+                  <h3>{service.name}</h3>
+                  <span>{service.id}</span>
                 </div>
-                {installing ? (
-                  <div className="store-card__progress">
-                    <span>
-                      Installing {app.name}
-                      <strong>{progress[app.id]}%</strong>
-                    </span>
-                    <ProgressBar value={progress[app.id]} label={`Installing ${app.name}`} />
-                  </div>
-                ) : null}
-                <footer className="store-card__footer">
-                  <span className={`store-category store-category--${app.category.toLowerCase()}`}>
-                    {app.category}
-                  </span>
-                  <div className="store-card__actions">
-                    {isInstalled ? (
-                      <button
-                        type="button"
-                        className="icon-button icon-button--sm store-card__uninstall"
-                        aria-label={`Uninstall ${app.name}`}
-                        title={`Uninstall ${app.name}`}
-                        onClick={() => setUninstallTarget(app)}
-                      >
-                        <Trash2 size={14} aria-hidden="true" />
-                      </button>
-                    ) : null}
-                    {renderInstallControl(app)}
-                  </div>
-                </footer>
-              </article>
-            )
-          })}
+                <StatusBadge tone={service.running ? 'success' : 'warning'}>
+                  {service.active}
+                </StatusBadge>
+              </header>
+              <p className="store-card__description">
+                {service.description || 'No description in the unit file.'}
+              </p>
+              <div className="store-card__meta">
+                <span>{service.sub}</span>
+              </div>
+              <footer className="store-card__footer">
+                <span className="store-category">{service.running ? 'running' : 'stopped'}</span>
+                <div className="store-card__actions">
+                  <button
+                    type="button"
+                    className="button button--sm"
+                    disabled={busy !== null}
+                    onClick={() => void act(service, 'restart')}
+                  >
+                    {busy === service.id ? (
+                      <Loader2 size={13} className="spin" aria-hidden="true" />
+                    ) : (
+                      <RotateCcw size={13} aria-hidden="true" />
+                    )}
+                    Restart
+                  </button>
+                  {service.running ? (
+                    <button
+                      type="button"
+                      className="button button--sm button--ghost"
+                      disabled={busy !== null || critical(service)}
+                      title={
+                        critical(service)
+                          ? 'Serving this page — stop it over incus instead'
+                          : undefined
+                      }
+                      onClick={() => setConfirmStop(service)}
+                    >
+                      <Square size={12} aria-hidden="true" />
+                      Stop
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="button button--sm button--primary"
+                      disabled={busy !== null}
+                      onClick={() => void act(service, 'start')}
+                    >
+                      <Play size={12} aria-hidden="true" />
+                      Start
+                    </button>
+                  )}
+                </div>
+              </footer>
+            </article>
+          ))}
         </div>
       )}
 
       <div className="store-footnote">
-        <AppIcon icon="Sparkles" accent="var(--accent-strong)" size="sm" />
+        <AppIcon icon="Activity" accent="var(--accent-strong)" size="sm" />
         <span>
-          Every install is isolated, auto-updated and backed up. Need something custom? Drop a
-          Compose file into <code>/AppData/Compose</code> and Orion will pick it up.
+          Units are container-local. The edge proxy and TLS live on the host and are not visible
+          from here.
         </span>
-        <button
-          type="button"
-          className="text-button"
-          onClick={() => navigate('files', { path: '/Projects' })}
-        >
-          Browse app data
-        </button>
       </div>
 
       <Modal
-        open={Boolean(uninstallTarget)}
-        onClose={() => setUninstallTarget(null)}
-        title={`Uninstall ${uninstallTarget?.name ?? 'app'}?`}
-        description="The container is removed but its data volume stays safe."
+        open={Boolean(confirmStop)}
+        onClose={() => setConfirmStop(null)}
+        title={`Stop ${confirmStop?.name ?? 'unit'}?`}
+        description="Anything depending on this unit stops answering until it is started again."
         size="sm"
         footer={
           <>
-            <button type="button" className="button" onClick={() => setUninstallTarget(null)}>
-              Keep app
+            <button type="button" className="button" onClick={() => setConfirmStop(null)}>
+              Keep running
             </button>
             <button
               type="button"
               className="button button--danger"
               onClick={() => {
-                if (!uninstallTarget) return
-                uninstallApp(uninstallTarget.id)
-                setUninstallTarget(null)
+                if (!confirmStop) return
+                void act(confirmStop, 'stop')
+                setConfirmStop(null)
               }}
             >
-              <Trash2 size={14} aria-hidden="true" />
-              Uninstall
+              <Square size={13} aria-hidden="true" />
+              Stop unit
             </button>
           </>
         }
       >
         <div className="danger-note">
-          <Trash2 size={17} aria-hidden="true" />
+          <Square size={16} aria-hidden="true" />
           <span>
-            {uninstallTarget?.name} will stop immediately. Your data stays in{' '}
-            <code>/AppData/{uninstallTarget?.id}</code> and can be restored by reinstalling.
+            {confirmStop?.id} is currently {confirmStop?.active}. Recovery is{' '}
+            <code>systemctl start {confirmStop?.id}</code> over incus or the Start button here.
           </span>
         </div>
       </Modal>

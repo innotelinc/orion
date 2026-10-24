@@ -1,0 +1,23 @@
+[Unit]
+Description=Orion API — files, storage and system facts for the desktop
+Documentation=https://nas.innotel.us/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/orion/orion-api.py
+Environment=ORION_ROOT=/srv/storage
+Environment=ORION_BIND=127.0.0.1
+Environment=ORION_PORT=8099
+Restart=always
+RestartSec=2
+# The file operations write the data volume; service control calls systemctl.
+User=root
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/srv/storage
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

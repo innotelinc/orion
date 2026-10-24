@@ -4,94 +4,83 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react'
-import { APP_BY_ID, DEFAULT_INSTALLED_IDS } from '../data/apps'
-import { INITIAL_FILES, joinPath } from '../data/files'
-import {
-  DEFAULT_SETTINGS,
-  INITIAL_NOTIFICATIONS,
-  INITIAL_STORAGE,
-  INITIAL_USERS,
-} from '../data/system'
-import { formatBytes } from '../lib/format'
-import {
-  loadListing,
-  loadLiveSnapshot,
-  type LiveSnapshot,
-  type LiveSystem,
-} from '../lib/live'
+import { DEFAULT_SETTINGS } from '../data/system'
+import { joinPath } from '../data/files'
+import { api, type StatePayload } from '../lib/api'
 import { usePersistentState } from '../hooks/usePersistentState'
 import type {
-  AppDefinition,
   FileNode,
-  FileTone,
-  InstalledApp,
+  Metrics,
   NotificationItem,
+  RootEntry,
+  ServiceAction,
   Settings,
   StorageState,
+  SystemInfo,
+  SystemService,
   Toast,
   ToastTone,
   UserAccount,
 } from '../types'
 
-const KEYS = {
-  settings: 'orion.settings.v1',
-  installed: 'orion.installed.v1',
-  files: 'orion.files.v1',
-  users: 'orion.users.v1',
-  storage: 'orion.storage.v1',
-  notifications: 'orion.notifications.v1',
-} as const
+const SETTINGS_KEY = 'orion.preferences.v2'
+
+const EMPTY_METRICS: Metrics = {
+  cpu: 0,
+  ram: 0,
+  temp: null,
+  cpuMhz: 0,
+  uptimeSeconds: 0,
+  netDown: 0,
+  netUp: 0,
+  cpuHistory: [],
+  ramHistory: [],
+  netDownHistory: [],
+  netUpHistory: [],
+}
+
+const EMPTY_STORAGE: StorageState = {
+  pools: [],
+  disks: [],
+  files: { count: 0, folders: 0, bytes: 0 },
+}
 
 interface ActionResult {
   ok: boolean
   error?: string
 }
 
-interface AddUserInput {
-  name: string
-  email: string
-  role: UserAccount['role']
-}
-
-export type DataMode = 'demo' | 'live'
-
 interface AppContextValue {
-  /** 'live' once a mounted host answers /api/system; 'demo' everywhere else. */
-  mode: DataMode
-  liveSystem: LiveSystem | null
-  /** Fetch one directory from the host (no-op in demo mode). */
-  loadDirectory: (path: string) => Promise<void>
-  /** Re-read the host snapshot after a reconnect. */
-  refreshLive: () => Promise<void>
   settings: Settings
   updateSettings: (patch: Partial<Settings>) => void
-  installed: Record<string, InstalledApp>
-  installApp: (app: AppDefinition) => void
-  uninstallApp: (id: string) => void
-  toggleAppRunning: (id: string) => void
+  system: SystemInfo | null
+  metrics: Metrics
   files: FileNode[]
-  addFolder: (parent: string, name: string) => ActionResult
-  addUploads: (parent: string, uploads: Array<{ name: string; size: number }>) => number
-  renameFile: (id: string, name: string) => ActionResult
-  deleteFiles: (ids: string[]) => number
-  toggleStar: (id: string) => void
+  roots: RootEntry[]
   storage: StorageState
-  assignDisks: (diskIds: string[], poolName: string) => ActionResult
-  createPool: (name: string, diskIds: string[]) => ActionResult
   users: UserAccount[]
-  addUser: (input: AddUserInput) => ActionResult
-  removeUser: (id: string) => ActionResult
+  services: SystemService[]
   notifications: NotificationItem[]
+  loading: boolean
+  error: string | null
+  refresh: () => Promise<void>
+  addFolder: (parent: string, name: string) => Promise<ActionResult>
+  addUploads: (parent: string, uploads: File[]) => Promise<number>
+  renameFile: (id: string, name: string) => Promise<ActionResult>
+  deleteFiles: (ids: string[]) => Promise<number>
+  toggleStar: (id: string) => Promise<void>
+  serviceAction: (unit: string, action: ServiceAction) => Promise<ActionResult>
   dismissNotification: (id: string) => void
   markAllRead: () => void
   markRead: (id: string) => void
   toasts: Toast[]
   pushToast: (input: { title: string; description?: string; tone?: ToastTone }) => void
   dismissToast: (id: string) => void
-  resetDemo: () => void
+  resetPreferences: () => void
 }
 
 const AppContext = createContext<AppContextValue | null>(null)
@@ -112,183 +101,54 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 function reviveSettings(value: unknown): Settings {
   const record = asRecord(value)
   if (!record) return DEFAULT_SETTINGS
-  const network = asRecord(record.network)
-  const security = asRecord(record.security)
-  return {
-    ...DEFAULT_SETTINGS,
-    ...(record as Partial<Settings>),
-    network: { ...DEFAULT_SETTINGS.network, ...(network ?? {}) },
-    security: { ...DEFAULT_SETTINGS.security, ...(security ?? {}) },
-  }
-}
-
-function seedInstalled(): Record<string, InstalledApp> {
-  const now = Date.now()
-  return Object.fromEntries(
-    DEFAULT_INSTALLED_IDS.map((id, index) => [
-      id,
-      {
-        id,
-        installedAt: new Date(now - index * 86_400_000).toISOString(),
-        running: APP_BY_ID.get(id)?.runningByDefault ?? true,
-      },
-    ]),
-  )
-}
-
-function reviveInstalled(value: unknown): Record<string, InstalledApp> {
-  const record = asRecord(value)
-  if (!record) return seedInstalled()
-  const next: Record<string, InstalledApp> = {}
-  for (const [id, entry] of Object.entries(record)) {
-    const item = asRecord(entry)
-    if (!APP_BY_ID.has(id) || !item) continue
-    next[id] = {
-      id,
-      installedAt: typeof item.installedAt === 'string' ? item.installedAt : new Date().toISOString(),
-      running: item.running !== false,
-    }
-  }
-  return next
-}
-
-function reviveFiles(value: unknown): FileNode[] {
-  if (!Array.isArray(value)) return INITIAL_FILES
-  const valid = value.every((item) => {
-    const node = asRecord(item)
-    return (
-      node &&
-      typeof node.id === 'string' &&
-      typeof node.name === 'string' &&
-      typeof node.parent === 'string' &&
-      (node.type === 'file' || node.type === 'folder')
-    )
-  })
-  if (!valid) return INITIAL_FILES
-  return (value as FileNode[]).map((node) => ({
-    ...node,
-    owner:
-      node.owner === 'alex'
-        ? 'u-alex'
-        : node.owner === 'sam'
-          ? 'u-sam'
-          : node.owner === 'priya'
-            ? 'u-priya'
-            : node.owner,
-  }))
-}
-
-function reviveUsers(value: unknown): UserAccount[] {
-  if (!Array.isArray(value)) return INITIAL_USERS
-  const valid = value.every((item) => {
-    const user = asRecord(item)
-    return user && typeof user.id === 'string' && typeof user.name === 'string' && typeof user.email === 'string'
-  })
-  return valid ? (value as UserAccount[]) : INITIAL_USERS
-}
-
-function reviveStorage(value: unknown): StorageState {
-  const record = asRecord(value)
-  if (!record || !Array.isArray(record.pools) || !Array.isArray(record.disks)) {
-    return INITIAL_STORAGE
-  }
-  return value as StorageState
-}
-
-function reviveNotifications(value: unknown): NotificationItem[] {
-  return Array.isArray(value) ? (value as NotificationItem[]) : INITIAL_NOTIFICATIONS
-}
-
-function toneForName(name: string): FileTone {
-  const extension = name.split('.').pop()?.toLowerCase() ?? ''
-  if (['jpg', 'jpeg', 'png', 'heic', 'webp', 'gif', 'svg', 'raw'].includes(extension)) return 'image'
-  if (['mp4', 'mkv', 'mov', 'avi', 'webm'].includes(extension)) return 'video'
-  if (['mp3', 'flac', 'wav', 'm4a', 'm4b', 'ogg'].includes(extension)) return 'audio'
-  if (['pdf', 'doc', 'docx', 'txt', 'md', 'rtf'].includes(extension)) return 'document'
-  if (['xls', 'xlsx', 'csv', 'numbers'].includes(extension)) return 'sheet'
-  if (['zip', 'tar', 'gz', 'zst', '7z', 'rar', 'iso', 'snap', 'pkg'].includes(extension)) return 'archive'
-  if (['js', 'ts', 'tsx', 'jsx', 'json', 'css', 'html', 'py', 'sh', 'yml', 'yaml'].includes(extension)) return 'code'
-  return 'file'
-}
-
-function uniqueName(existing: Set<string>, rawName: string) {
-  if (!existing.has(rawName.toLowerCase())) return rawName
-  const dot = rawName.lastIndexOf('.')
-  const base = dot > 0 ? rawName.slice(0, dot) : rawName
-  const extension = dot > 0 ? rawName.slice(dot) : ''
-  let counter = 2
-  let candidate = `${base} (${counter})${extension}`
-  while (existing.has(candidate.toLowerCase())) {
-    counter += 1
-    candidate = `${base} (${counter})${extension}`
-  }
-  return candidate
+  return { ...DEFAULT_SETTINGS, ...(record as Partial<Settings>) }
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = usePersistentState<Settings>(
-    KEYS.settings,
+    SETTINGS_KEY,
     DEFAULT_SETTINGS,
     reviveSettings,
   )
-  const [installed, setInstalled] = usePersistentState<Record<string, InstalledApp>>(
-    KEYS.installed,
-    seedInstalled(),
-    reviveInstalled,
-  )
-  const [files, setFiles] = usePersistentState<FileNode[]>(KEYS.files, INITIAL_FILES, reviveFiles)
-  const [users, setUsers] = usePersistentState<UserAccount[]>(KEYS.users, INITIAL_USERS, reviveUsers)
-  const [storage, setStorage] = usePersistentState<StorageState>(
-    KEYS.storage,
-    INITIAL_STORAGE,
-    reviveStorage,
-  )
-  const [notifications, setNotifications] = usePersistentState<NotificationItem[]>(
-    KEYS.notifications,
-    INITIAL_NOTIFICATIONS,
-    reviveNotifications,
-  )
+  const [system, setSystem] = useState<SystemInfo | null>(null)
+  const [metrics, setMetrics] = useState<Metrics>(EMPTY_METRICS)
+  const [state, setState] = useState<StatePayload>({
+    files: [],
+    storage: EMPTY_STORAGE,
+    users: [],
+    services: [],
+    notifications: [],
+    roots: [],
+  })
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set())
+  const [read, setRead] = useState<Set<string>>(new Set())
   const [toasts, setToasts] = useState<Toast[]>([])
-
-  // Live mode: the installed server is the source of truth. These stay out of
-  // localStorage on purpose — a stale host snapshot must never pose as demo data
-  // (or the other way round) after a reload.
-  const [mode, setMode] = useState<DataMode>('demo')
-  const [liveSystem, setLiveSystem] = useState<LiveSystem | null>(null)
-  const [liveFiles, setLiveFiles] = useState<FileNode[]>([])
-  const [liveUsers, setLiveUsers] = useState<UserAccount[]>([])
-  const [liveStorage, setLiveStorage] = useState<StorageState | null>(null)
-
-  const applySnapshot = useCallback((snapshot: LiveSnapshot) => {
-    setMode('live')
-    setLiveSystem(snapshot.system)
-    setLiveStorage(snapshot.storage)
-    setLiveUsers(snapshot.users)
-    setLiveFiles(snapshot.files)
-  }, [])
-
-  const refreshLive = useCallback(async () => {
-    const snapshot = await loadLiveSnapshot()
-    if (snapshot) applySnapshot(snapshot)
-  }, [applySnapshot])
+  const mounted = useRef(true)
 
   useEffect(() => {
-    let cancelled = false
-    loadLiveSnapshot().then((snapshot) => {
-      if (snapshot && !cancelled) applySnapshot(snapshot)
-    })
-    return () => {
-      cancelled = true
+    mounted.current = true
+    // The old build seeded files, disks, users and notices into localStorage.
+    // None of it is true now; drop it once so a returning browser cannot show
+    // a stale inventory beside the live one.
+    try {
+      for (const key of [
+        'orion.files.v1',
+        'orion.storage.v1',
+        'orion.users.v1',
+        'orion.installed.v1',
+        'orion.notifications.v1',
+        'orion.settings.v1',
+      ]) {
+        window.localStorage.removeItem(key)
+      }
+    } catch {
+      // Private mode or storage disabled: nothing to clean.
     }
-  }, [applySnapshot])
-
-  const loadDirectory = useCallback(async (path: string) => {
-    const listing = await loadListing(path)
-    if (!listing) return
-    setLiveFiles((previous) => [
-      ...previous.filter((node) => node.parent !== listing.path),
-      ...listing.entries,
-    ])
+    return () => {
+      mounted.current = false
+    }
   }, [])
 
   const updateSettings = useCallback(
@@ -315,442 +175,276 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setToasts((previous) => previous.filter((toast) => toast.id !== id))
   }, [])
 
-  const LIVE_READ_ONLY =
-    'This screen is reading a real host. Orion reports on it and never writes to it.'
+  const loadState = useCallback(async () => {
+    const payload = await api.state()
+    if (!mounted.current) return
+    setState(payload)
+    setError(null)
+  }, [])
 
-  /** Refuse a filesystem/pool/user mutation while live, loudly. */
-  const blockLive = useCallback((): ActionResult | null => {
-    if (mode !== 'live') return null
-    pushToast({ title: 'Read-only live mount', description: LIVE_READ_ONLY, tone: 'info' })
-    return { ok: false, error: LIVE_READ_ONLY }
-  }, [mode, pushToast])
+  const refresh = useCallback(async () => {
+    try {
+      const [nextSystem, nextState] = await Promise.all([api.system(), api.state()])
+      if (!mounted.current) return
+      setSystem(nextSystem)
+      setState(nextState)
+      setError(null)
+    } catch (failure) {
+      if (!mounted.current) return
+      setError(failure instanceof Error ? failure.message : 'The API is unreachable.')
+    } finally {
+      if (mounted.current) setLoading(false)
+    }
+  }, [])
 
-  const installApp = useCallback(
-    (app: AppDefinition) => {
-      setInstalled((previous) => ({
-        ...previous,
-        [app.id]: {
-          id: app.id,
-          installedAt: new Date().toISOString(),
-          running: true,
-        },
-      }))
-      pushToast({
-        title: `${app.name} is ready`,
-        description: 'Installed and running — no configuration required.',
-        tone: 'success',
-      })
-    },
-    [pushToast, setInstalled],
-  )
-
-  const uninstallApp = useCallback(
-    (id: string) => {
-      const app = APP_BY_ID.get(id)
-      setInstalled((previous) => {
-        const next = { ...previous }
-        delete next[id]
-        return next
-      })
-      if (app) {
-        pushToast({
-          title: `${app.name} uninstalled`,
-          description: 'Its data volume was kept in /AppData.',
-          tone: 'info',
+  useEffect(() => {
+    void refresh()
+    const stateTimer = window.setInterval(() => {
+      if (document.visibilityState === 'hidden') return
+      loadState().catch(() => undefined)
+    }, 20_000)
+    const metricsTimer = window.setInterval(() => {
+      if (document.visibilityState === 'hidden') return
+      api
+        .metrics()
+        .then((next) => {
+          if (mounted.current) setMetrics(next)
         })
-      }
-    },
-    [pushToast, setInstalled],
-  )
-
-  const toggleAppRunning = useCallback(
-    (id: string) => {
-      const current = installed[id]
-      if (!current) return
-      const running = !current.running
-      const app = APP_BY_ID.get(id)
-      setInstalled((previous) => ({
-        ...previous,
-        [id]: { ...previous[id], running },
-      }))
-      pushToast({
-        title: `${app?.name ?? 'App'} ${running ? 'started' : 'stopped'}`,
-        description: running ? 'Container is healthy.' : 'Container is paused, data preserved.',
-        tone: 'info',
-      })
-    },
-    [installed, pushToast, setInstalled],
-  )
+        .catch(() => undefined)
+    }, 3000)
+    const firstMetrics = window.setTimeout(() => {
+      api
+        .metrics()
+        .then((next) => {
+          if (mounted.current) setMetrics(next)
+        })
+        .catch(() => undefined)
+    }, 900)
+    return () => {
+      window.clearInterval(stateTimer)
+      window.clearInterval(metricsTimer)
+      window.clearTimeout(firstMetrics)
+    }
+  }, [loadState, refresh])
 
   const addFolder = useCallback(
-    (parent: string, rawName: string): ActionResult => {
-      const blocked = blockLive()
-      if (blocked) return blocked
+    async (parent: string, rawName: string): Promise<ActionResult> => {
       const name = rawName.trim()
       if (!name) return { ok: false, error: 'Give the folder a name.' }
       if (name.length > 80) return { ok: false, error: 'Keep names under 80 characters.' }
       if (/[\\/]/.test(name)) return { ok: false, error: 'Names cannot contain slashes.' }
       if (name === '.' || name === '..') return { ok: false, error: 'That name is reserved.' }
-      const duplicate = files.some(
-        (node) => node.parent === parent && node.name.toLowerCase() === name.toLowerCase(),
-      )
-      if (duplicate) return { ok: false, error: 'A file or folder with that name already exists.' }
-      const node: FileNode = {
-        id: newId('folder'),
-        name,
-        parent,
-        type: 'folder',
-        size: null,
-        modifiedAt: new Date().toISOString(),
-        owner: 'u-alex',
-        tone: 'folder',
+      try {
+        await api.mkdir(parent, name)
+        await loadState()
+        pushToast({ title: 'Folder created', description: joinPath(parent, name), tone: 'success' })
+        return { ok: true }
+      } catch (failure) {
+        return {
+          ok: false,
+          error: failure instanceof Error ? failure.message : 'Could not create that folder.',
+        }
       }
-      setFiles((previous) => [...previous, node])
-      pushToast({ title: 'Folder created', description: joinPath(parent, name), tone: 'success' })
-      return { ok: true }
     },
-    [blockLive, files, pushToast, setFiles],
+    [loadState, pushToast],
   )
 
   const addUploads = useCallback(
-    (parent: string, uploads: Array<{ name: string; size: number }>) => {
-      if (blockLive()) return 0
+    async (parent: string, uploads: File[]): Promise<number> => {
       if (!uploads.length) return 0
-      const existing = new Set(
-        files.filter((node) => node.parent === parent).map((node) => node.name.toLowerCase()),
-      )
-      const now = new Date().toISOString()
-      const nodes = uploads.map((upload) => {
-        const safeName = uniqueName(existing, upload.name || 'Untitled file')
-        existing.add(safeName.toLowerCase())
-        return {
-          id: newId('file'),
-          name: safeName,
-          parent,
-          type: 'file' as const,
-          size: Number.isFinite(upload.size) ? Math.max(0, upload.size) : 0,
-          modifiedAt: now,
-          owner: 'u-alex',
-          tone: toneForName(safeName),
+      let uploaded = 0
+      let bytes = 0
+      for (const file of uploads) {
+        try {
+          const node = await api.upload(parent, file)
+          bytes += node.size ?? file.size
+          uploaded += 1
+        } catch (failure) {
+          pushToast({
+            title: `Could not upload ${file.name}`,
+            description: failure instanceof Error ? failure.message : 'The host refused it.',
+            tone: 'error',
+          })
         }
-      })
-      setFiles((previous) => [...previous, ...nodes])
-      pushToast({
-        title: `${nodes.length} ${nodes.length === 1 ? 'file' : 'files'} uploaded`,
-        description: `${formatBytes(nodes.reduce((total, node) => total + (node.size ?? 0), 0))} added to ${parent}`,
-        tone: 'success',
-      })
-      return nodes.length
+      }
+      if (uploaded) {
+        await loadState()
+        pushToast({
+          title: `${uploaded} ${uploaded === 1 ? 'file' : 'files'} uploaded`,
+          description: `${bytes.toLocaleString()} bytes written to ${parent}`,
+          tone: 'success',
+        })
+      }
+      return uploaded
     },
-    [blockLive, files, pushToast, setFiles],
+    [loadState, pushToast],
   )
 
   const renameFile = useCallback(
-    (id: string, rawName: string): ActionResult => {
-      const blocked = blockLive()
-      if (blocked) return blocked
+    async (id: string, rawName: string): Promise<ActionResult> => {
       const name = rawName.trim()
       if (!name) return { ok: false, error: 'Name cannot be empty.' }
       if (/[\\/]/.test(name)) return { ok: false, error: 'Names cannot contain slashes.' }
-      const target = files.find((node) => node.id === id)
-      if (!target) return { ok: false, error: 'That item no longer exists.' }
-      const duplicate = files.some(
-        (node) =>
-          node.id !== id &&
-          node.parent === target.parent &&
-          node.name.toLowerCase() === name.toLowerCase(),
-      )
-      if (duplicate) return { ok: false, error: 'An item with that name already exists.' }
-      setFiles((previous) =>
-        previous.map((node) =>
-          node.id === id
-            ? {
-                ...node,
-                name,
-                tone: node.type === 'file' ? toneForName(name) : 'folder',
-                modifiedAt: new Date().toISOString(),
-              }
-            : node,
-        ),
-      )
-      pushToast({ title: 'Renamed', description: name, tone: 'success' })
-      return { ok: true }
+      try {
+        await api.rename(id, name)
+        await loadState()
+        pushToast({ title: 'Renamed', description: name, tone: 'success' })
+        return { ok: true }
+      } catch (failure) {
+        return {
+          ok: false,
+          error: failure instanceof Error ? failure.message : 'Could not rename that item.',
+        }
+      }
     },
-    [blockLive, files, pushToast, setFiles],
+    [loadState, pushToast],
   )
 
   const deleteFiles = useCallback(
-    (ids: string[]) => {
-      if (blockLive()) return 0
+    async (ids: string[]): Promise<number> => {
       if (!ids.length) return 0
-      const idSet = new Set(ids)
-      const selected = files.filter((node) => idSet.has(node.id))
-      const folderPaths = selected
-        .filter((node) => node.type === 'folder')
-        .map((node) => joinPath(node.parent, node.name))
-      const remaining = files.filter((node) => {
-        if (idSet.has(node.id)) return false
-        return !folderPaths.some(
-          (path) => node.parent === path || node.parent.startsWith(`${path}/`),
-        )
-      })
-      const removed = files.length - remaining.length
-      setFiles(remaining)
-      pushToast({
-        title: `${removed} ${removed === 1 ? 'item' : 'items'} moved to trash`,
-        description: 'You can restore them from Backups → Trash.',
-        tone: 'info',
-      })
-      return removed
+      try {
+        const result = await api.remove(ids)
+        await loadState()
+        pushToast({
+          title: `${result.moved} ${result.moved === 1 ? 'item' : 'items'} moved to Trash`,
+          description: 'They stay on disk under .orion/trash.',
+          tone: 'info',
+        })
+        return result.moved
+      } catch (failure) {
+        pushToast({
+          title: 'Delete failed',
+          description: failure instanceof Error ? failure.message : 'Nothing was moved.',
+          tone: 'error',
+        })
+        return 0
+      }
     },
-    [blockLive, files, pushToast, setFiles],
+    [loadState, pushToast],
   )
 
   const toggleStar = useCallback(
-    (id: string) => {
-      const toggle = (nodes: FileNode[]) =>
-        nodes.map((node) => (node.id === id ? { ...node, starred: !node.starred } : node))
-      if (mode === 'live') {
-        setLiveFiles(toggle)
-        return
-      }
-      setFiles(toggle)
-    },
-    [mode, setFiles],
-  )
-
-  const assignDisks = useCallback(
-    (diskIds: string[], poolName: string): ActionResult => {
-      const blocked = blockLive()
-      if (blocked) return blocked
-      if (!diskIds.length) return { ok: false, error: 'Select at least one disk.' }
-      const pool = storage.pools.find((item) => item.name === poolName)
-      if (!pool) return { ok: false, error: 'Choose a pool for these disks.' }
-      const disks = storage.disks.filter(
-        (disk) => diskIds.includes(disk.id) && disk.pool === null,
-      )
-      if (!disks.length) return { ok: false, error: 'Those disks are already assigned.' }
-      const added = disks.reduce((total, disk) => total + disk.capacityTb, 0)
-      setStorage((previous) => ({
-        pools: previous.pools.map((item) =>
-          item.name === poolName ? { ...item, totalTb: item.totalTb + added } : item,
-        ),
-        disks: previous.disks.map((disk) =>
-          diskIds.includes(disk.id) && disk.pool === null
-            ? { ...disk, pool: poolName }
-            : disk,
-        ),
-      }))
-      pushToast({
-        title: 'Pool expanded',
-        description: `${disks.length} ${disks.length === 1 ? 'disk' : 'disks'} added to ${poolName}.`,
-        tone: 'success',
-      })
-      return { ok: true }
-    },
-    [blockLive, pushToast, setStorage, storage.disks, storage.pools],
-  )
-
-  const createPool = useCallback(
-    (rawName: string, diskIds: string[]): ActionResult => {
-      const blocked = blockLive()
-      if (blocked) return blocked
-      const name = rawName.trim()
-      if (!name) return { ok: false, error: 'Give the pool a name.' }
-      if (storage.pools.some((pool) => pool.name.toLowerCase() === name.toLowerCase())) {
-        return { ok: false, error: 'A pool with that name already exists.' }
-      }
-      if (!diskIds.length) return { ok: false, error: 'Select at least one disk.' }
-      const disks = storage.disks.filter(
-        (disk) => diskIds.includes(disk.id) && disk.pool === null,
-      )
-      if (!disks.length) return { ok: false, error: 'Those disks are already assigned.' }
-      const rawCapacity = disks.reduce((total, disk) => total + disk.capacityTb, 0)
-      const usable =
-        disks.length === 1
-          ? rawCapacity
-          : disks.length === 2
-            ? rawCapacity / 2
-            : rawCapacity - Math.max(...disks.map((disk) => disk.capacityTb))
-      const id = newId('pool')
-      setStorage((previous) => ({
-        pools: [
-          ...previous.pools,
-          {
-            id,
-            name,
-            usedTb: 0,
-            totalTb: Math.round(usable * 10) / 10,
-            raid: disks.length >= 3 ? 'RAID 5' : disks.length === 2 ? 'RAID 1' : 'Single',
-            health: 'Healthy',
-            mount: `/mnt/${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
-          },
-        ],
-        disks: previous.disks.map((disk) =>
-          diskIds.includes(disk.id) && disk.pool === null ? { ...disk, pool: name } : disk,
-        ),
-      }))
-      pushToast({
-        title: `${name} created`,
-        description: `${usable.toFixed(1)} TB usable across ${disks.length} ${disks.length === 1 ? 'disk' : 'disks'}.`,
-        tone: 'success',
-      })
-      return { ok: true }
-    },
-    [blockLive, pushToast, setStorage, storage.disks, storage.pools],
-  )
-
-  const addUser = useCallback(
-    (input: AddUserInput): ActionResult => {
-      const blocked = blockLive()
-      if (blocked) return blocked
-      const name = input.name.trim()
-      const email = input.email.trim().toLowerCase()
-      if (name.length < 2) return { ok: false, error: 'Enter a name with at least 2 characters.' }
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        return { ok: false, error: 'Enter a valid email address.' }
-      }
-      if (users.some((user) => user.email.toLowerCase() === email)) {
-        return { ok: false, error: 'A user with that email already exists.' }
-      }
-      const palette = ['#0a63ff', '#8b5cf6', '#10b981', '#f59e0b', '#f43f5e', '#06b6d4']
-      setUsers((previous) => [
-        ...previous,
-        {
-          id: newId('user'),
-          name,
-          email,
-          role: input.role,
-          lastActive: 'Invited',
-          color: palette[previous.length % palette.length],
-        },
-      ])
-      pushToast({ title: `${name} invited`, description: `${email} · ${input.role}`, tone: 'success' })
-      return { ok: true }
-    },
-    [blockLive, pushToast, setUsers, users],
-  )
-
-  const removeUser = useCallback(
-    (id: string): ActionResult => {
-      const blocked = blockLive()
-      if (blocked) return blocked
-      const user = users.find((item) => item.id === id)
-      if (!user) return { ok: false, error: 'User not found.' }
-      if (user.isCurrent) return { ok: false, error: 'You cannot remove your own account.' }
-      if (user.role === 'Owner') return { ok: false, error: 'The owner account is protected.' }
-      setUsers((previous) => previous.filter((item) => item.id !== id))
-      pushToast({ title: `${user.name} removed`, description: 'Their share permissions were revoked.', tone: 'info' })
-      return { ok: true }
-    },
-    [blockLive, pushToast, setUsers, users],
-  )
-
-  const dismissNotification = useCallback(
-    (id: string) => setNotifications((previous) => previous.filter((item) => item.id !== id)),
-    [setNotifications],
-  )
-
-  const markRead = useCallback(
-    (id: string) =>
-      setNotifications((previous) =>
-        previous.map((item) => (item.id === id ? { ...item, read: true } : item)),
-      ),
-    [setNotifications],
-  )
-
-  const markAllRead = useCallback(
-    () => setNotifications((previous) => previous.map((item) => ({ ...item, read: true }))),
-    [setNotifications],
-  )
-
-  const resetDemo = useCallback(() => {
-    if (mode === 'live') {
-      void refreshLive()
-      pushToast({
-        title: 'Reloaded from the host',
-        description: 'Live data was re-read from the mounted roots.',
-        tone: 'info',
-      })
-      return
-    }
-    for (const key of Object.values(KEYS)) {
+    async (id: string) => {
+      const node = state.files.find((file) => file.id === id)
       try {
-        window.localStorage.removeItem(key)
-      } catch {
-        // Ignore storage failures.
+        await api.star(id, !node?.starred)
+        setState((previous) => ({
+          ...previous,
+          files: previous.files.map((file) =>
+            file.id === id ? { ...file, starred: !file.starred } : file,
+          ),
+        }))
+      } catch (failure) {
+        pushToast({
+          title: 'Could not save the star',
+          description: failure instanceof Error ? failure.message : 'The host refused it.',
+          tone: 'error',
+        })
       }
+    },
+    [pushToast, state.files],
+  )
+
+  const serviceAction = useCallback(
+    async (unit: string, action: ServiceAction): Promise<ActionResult> => {
+      try {
+        await api.service(unit, action)
+        await loadState()
+        const done = action === 'restart' ? 'restarted' : action === 'stop' ? 'stopped' : 'started'
+        pushToast({ title: `${unit} ${done}`, tone: 'success' })
+        return { ok: true }
+      } catch (failure) {
+        return {
+          ok: false,
+          error: failure instanceof Error ? failure.message : 'systemctl refused the change.',
+        }
+      }
+    },
+    [loadState, pushToast],
+  )
+
+  const dismissNotification = useCallback((id: string) => {
+    setDismissed((previous) => new Set(previous).add(id))
+  }, [])
+
+  const markRead = useCallback((id: string) => {
+    setRead((previous) => new Set(previous).add(id))
+  }, [])
+
+  const markAllRead = useCallback(() => {
+    setRead(new Set(state.notifications.map((item) => item.id)))
+  }, [state.notifications])
+
+  const resetPreferences = useCallback(() => {
+    try {
+      window.localStorage.removeItem(SETTINGS_KEY)
+    } catch {
+      // Nothing to clear.
     }
     window.location.reload()
-  }, [mode, pushToast, refreshLive])
+  }, [])
+
+  const notifications = useMemo(
+    () =>
+      state.notifications
+        .filter((item) => !dismissed.has(item.id))
+        .map((item) => (read.has(item.id) ? { ...item, read: true } : item)),
+    [dismissed, read, state.notifications],
+  )
 
   const value = useMemo<AppContextValue>(
     () => ({
-      mode,
-      liveSystem,
-      loadDirectory,
-      refreshLive,
       settings,
       updateSettings,
-      installed,
-      installApp,
-      uninstallApp,
-      toggleAppRunning,
-      files: mode === 'live' ? liveFiles : files,
+      system,
+      metrics,
+      files: state.files,
+      roots: state.roots,
+      storage: state.storage,
+      users: state.users,
+      services: state.services,
+      notifications,
+      loading,
+      error,
+      refresh,
       addFolder,
       addUploads,
       renameFile,
       deleteFiles,
       toggleStar,
-      storage: liveStorage ?? storage,
-      assignDisks,
-      createPool,
-      users: mode === 'live' ? liveUsers : users,
-      addUser,
-      removeUser,
-      notifications,
+      serviceAction,
       dismissNotification,
       markAllRead,
       markRead,
       toasts,
       pushToast,
       dismissToast,
-      resetDemo,
+      resetPreferences,
     }),
     [
-      mode,
-      liveSystem,
-      loadDirectory,
-      refreshLive,
       settings,
       updateSettings,
-      installed,
-      installApp,
-      uninstallApp,
-      toggleAppRunning,
-      liveFiles,
-      files,
+      system,
+      metrics,
+      state,
+      notifications,
+      loading,
+      error,
+      refresh,
       addFolder,
       addUploads,
       renameFile,
       deleteFiles,
       toggleStar,
-      liveStorage,
-      storage,
-      assignDisks,
-      createPool,
-      liveUsers,
-      users,
-      addUser,
-      removeUser,
-      notifications,
+      serviceAction,
       dismissNotification,
       markAllRead,
       markRead,
       toasts,
       pushToast,
       dismissToast,
-      resetDemo,
+      resetPreferences,
     ],
   )
 

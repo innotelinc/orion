@@ -3,7 +3,6 @@ import {
   ArrowDown,
   ArrowRight,
   ArrowUp,
-  Camera,
   ChevronRight,
   CircleCheckBig,
   File,
@@ -25,12 +24,11 @@ import {
   TriangleAlert,
   Upload,
 } from 'lucide-react'
-import { APP_BY_ID, APP_CATALOG } from '../data/apps'
+import { BUILTIN_APPS } from '../data/apps'
 import { useApp } from '../context/AppContext'
-import { useTelemetry, type Telemetry } from '../hooks/useTelemetry'
-import { formatClock, formatDay, formatPercent, formatTb, greeting, relativeTime } from '../lib/format'
+import { formatBytes, formatClock, formatDay, formatPercent, greeting, relativeTime } from '../lib/format'
 import type { NavigateOptions, RouteName } from '../hooks/useRoute'
-import type { AppDefinition, FileTone, NotificationTone } from '../types'
+import type { FileTone, NotificationTone } from '../types'
 import { AppIcon } from '../components/ui/AppIcon'
 import { ProgressBar } from '../components/ui/ProgressBar'
 import { Sparkline } from '../components/ui/Sparkline'
@@ -95,8 +93,16 @@ function MetricRing({
   )
 }
 
-function ClockCard({ uptimeDays }: { uptimeDays: number }) {
-  const { settings } = useApp()
+function uptimeLabel(seconds: number) {
+  const days = Math.floor(seconds / 86_400)
+  const hours = Math.floor((seconds % 86_400) / 3600)
+  if (days > 0) return `${days}d ${hours}h`
+  const minutes = Math.floor((seconds % 3600) / 60)
+  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`
+}
+
+function ClockCard() {
+  const { settings, system, metrics } = useApp()
   const [now, setNow] = useState(() => new Date())
 
   useEffect(() => {
@@ -104,10 +110,14 @@ function ClockCard({ uptimeDays }: { uptimeDays: number }) {
     return () => window.clearInterval(timer)
   }, [])
 
+  const name = system?.identity?.name || system?.identity?.email?.split('@')[0] || 'there'
+
   return (
     <section className="clock-card card" aria-label="Date and time">
       <div className="clock-card__top">
-        <span className="clock-card__greeting">{greeting(now)}, Alex</span>
+        <span className="clock-card__greeting">
+          {greeting(now)}, {name}
+        </span>
         <StatusBadge tone="success">Online</StatusBadge>
       </div>
       <time className="clock-card__time tabular" dateTime={now.toISOString()}>
@@ -116,44 +126,51 @@ function ClockCard({ uptimeDays }: { uptimeDays: number }) {
       <p className="clock-card__date">{formatDay(now)}</p>
       <div className="clock-card__meta">
         <span className="live-dot" aria-hidden="true" />
-        Up {uptimeDays} {uptimeDays === 1 ? 'day' : 'days'} · Orion 1.4
+        Up {uptimeLabel(metrics.uptimeSeconds || system?.uptimeSeconds || 0)} ·{' '}
+        {system ? `${system.hostname} · ${system.version.version}` : 'connecting…'}
       </div>
     </section>
   )
 }
 
-function SystemCard({ onDetails, telemetry }: { onDetails: () => void; telemetry: Telemetry }) {
-  // Live hosts report their own memory; the demo keeps the 16 GB story.
-  const ramUsed = telemetry.ramUsedGb?.toFixed(1) ?? ((telemetry.ram / 100) * 16).toFixed(1)
-  const ramTotal = telemetry.ramTotalGb ? telemetry.ramTotalGb.toFixed(0) : '16'
-  const temperature = telemetry.temp > 0 ? `${telemetry.temp}°C` : 'no sensor'
+function SystemCard({ onDetails }: { onDetails?: () => void }) {
+  const { metrics, system } = useApp()
+  const memory = system?.memory
 
   return (
     <section className="system-card card" aria-labelledby="system-title">
       <header className="widget-head">
         <h2 id="system-title">System</h2>
-        <button type="button" className="widget-link" onClick={onDetails}>
-          Details
-          <ChevronRight size={14} aria-hidden="true" />
-        </button>
+        {onDetails ? (
+          <button type="button" className="widget-link" onClick={onDetails}>
+            Details
+            <ChevronRight size={14} aria-hidden="true" />
+          </button>
+        ) : null}
       </header>
       <div className="system-card__gauges">
         <MetricRing
-          value={telemetry.cpu}
+          value={metrics.cpu}
           label="CPU"
-          detail={`${telemetry.cpuClock} GHz · ${temperature}`}
+          detail={`${(metrics.cpuMhz / 1000).toFixed(2)} GHz${
+            metrics.temp === null ? '' : ` · ${metrics.temp}°C`
+          }`}
           tone="accent"
         />
         <MetricRing
-          value={telemetry.ram}
+          value={metrics.ram}
           label="RAM"
-          detail={`${ramUsed} / ${ramTotal} GB`}
+          detail={
+            memory
+              ? `${formatBytes(memory.usedBytes)} / ${formatBytes(memory.totalBytes)}`
+              : '—'
+          }
           tone="success"
         />
       </div>
       <div className="system-card__spark">
         <Sparkline
-          values={telemetry.cpuHistory}
+          values={metrics.cpuHistory.length ? metrics.cpuHistory : [0, 0]}
           height={28}
           color="var(--accent)"
           showGrid={false}
@@ -164,15 +181,12 @@ function SystemCard({ onDetails, telemetry }: { onDetails: () => void; telemetry
   )
 }
 
-function StorageCard({
-  onOpen,
-}: {
-  onOpen: () => void
-}) {
+function StorageCard({ onOpen }: { onOpen: () => void }) {
   const { storage } = useApp()
-  const used = storage.pools.reduce((total, pool) => total + pool.usedTb, 0)
-  const total = storage.pools.reduce((sum, pool) => sum + pool.totalTb, 0)
+  const used = storage.pools.reduce((total, pool) => total + pool.usedBytes, 0)
+  const total = storage.pools.reduce((sum, pool) => sum + pool.totalBytes, 0)
   const percent = formatPercent(used, total)
+  const warning = storage.pools.some((pool) => pool.health === 'Warning')
 
   return (
     <section className="storage-widget card" aria-labelledby="storage-widget-title">
@@ -193,47 +207,48 @@ function StorageCard({
         </span>
         <div className="storage-widget__copy">
           <div className="storage-widget__line">
-            <StatusBadge tone="success">Healthy</StatusBadge>
+            <StatusBadge tone={warning ? 'warning' : 'success'}>
+              {warning ? 'Attention' : 'Healthy'}
+            </StatusBadge>
             <span className="storage-widget__percent tabular">{percent}%</span>
           </div>
           <p>
-            <strong className="tabular">{used.toFixed(2)} TB</strong> of {formatTb(total, 0)} used
+            <strong className="tabular">{formatBytes(used)}</strong> of {formatBytes(total)} used
           </p>
         </div>
       </div>
       <ProgressBar value={percent} label="Storage used" />
       <button type="button" className="storage-widget__footer" onClick={onOpen}>
-        {storage.pools.length} pools · {storage.disks.length} disks
+        {storage.pools.length} volumes · {storage.disks.length} devices
         <ChevronRight size={14} aria-hidden="true" />
       </button>
     </section>
   )
 }
 
-function NetworkCard({ onDetails, telemetry }: { onDetails: () => void; telemetry: Telemetry }) {
+function NetworkCard() {
+  const { metrics, system } = useApp()
+  const link = system?.network.linkMbps
   return (
     <section className="network-card card" aria-labelledby="network-title">
       <header className="widget-head">
         <h2 id="network-title">Network</h2>
-        <button type="button" className="iface-chip" onClick={onDetails}>
+        <span className="iface-chip">
           <span className="live-dot" aria-hidden="true" />
-          eth0
-          <ChevronRight size={12} aria-hidden="true" />
-        </button>
+          {system?.network.interface ?? 'eth0'}
+        </span>
       </header>
       <div className="network-card__chart">
         <Sparkline
-          values={telemetry.netDownHistory}
+          values={metrics.netDownHistory.length ? metrics.netDownHistory : [0, 0]}
           color="var(--info)"
           height={78}
-          max={100}
           label="Download throughput"
         />
         <Sparkline
-          values={telemetry.netUpHistory}
+          values={metrics.netUpHistory.length ? metrics.netUpHistory : [0, 0]}
           color="var(--success)"
           height={78}
-          max={100}
           showGrid={false}
           className="network-card__overlay"
           label="Upload throughput"
@@ -244,35 +259,44 @@ function NetworkCard({ onDetails, telemetry }: { onDetails: () => void; telemetr
           <span className="legend-icon legend-icon--down" aria-hidden="true">
             <ArrowDown size={11} />
           </span>
-          <strong className="tabular">{telemetry.netDown.toFixed(1)}</strong> MB/s
+          <strong className="tabular">{formatBytes(metrics.netDown)}</strong>/s
         </span>
         <span>
           <span className="legend-icon legend-icon--up" aria-hidden="true">
             <ArrowUp size={11} />
           </span>
-          <strong className="tabular">{telemetry.netUp.toFixed(1)}</strong> MB/s
+          <strong className="tabular">{formatBytes(metrics.netUp)}</strong>/s
         </span>
-        <span className="network-card__link">10 GbE</span>
+        <span className="network-card__link">
+          {link ? `${(link / 1000).toFixed(0)} GbE` : system?.network.ip || 'offline'}
+        </span>
       </div>
     </section>
   )
 }
 
-function AppTile({ app, onLaunch }: { app: AppDefinition; onLaunch: () => void }) {
-  const { installed } = useApp()
-  const running = installed[app.id]?.running
+interface Tile {
+  id: string
+  name: string
+  icon: string
+  accent: string
+  running: boolean
+  onLaunch: () => void
+}
+
+function AppTile({ tile }: { tile: Tile }) {
   return (
     <button
       type="button"
       className="app-tile"
-      onClick={onLaunch}
-      aria-label={`Open ${app.name}${running ? ', running' : ''}`}
+      onClick={tile.onLaunch}
+      aria-label={`Open ${tile.name}${tile.running ? ', running' : ''}`}
     >
-      <AppIcon icon={app.icon} accent={app.accent} size="lg" />
-      <span className="app-tile__name">{app.name}</span>
+      <AppIcon icon={tile.icon} accent={tile.accent} size="lg" />
+      <span className="app-tile__name">{tile.name}</span>
       <span className="app-tile__status">
-        <span className={`app-tile__dot ${running ? 'is-running' : ''}`} aria-hidden="true" />
-        {running ? 'Running' : 'Stopped'}
+        <span className={`app-tile__dot ${tile.running ? 'is-running' : ''}`} aria-hidden="true" />
+        {tile.running ? 'Running' : 'Stopped'}
       </span>
     </button>
   )
@@ -280,49 +304,74 @@ function AppTile({ app, onLaunch }: { app: AppDefinition; onLaunch: () => void }
 
 interface DashboardProps {
   navigate: (name: RouteName, options?: NavigateOptions) => void
-  onLaunchApp: (app: AppDefinition) => void
+  onLaunchApp?: (app: unknown) => void
   onOpenPalette: () => void
 }
 
-export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardProps) {
+export function Dashboard({ navigate, onOpenPalette }: DashboardProps) {
   const {
-    installed,
     notifications,
     dismissNotification,
     markRead,
     files,
     users,
-    addUploads,
-    settings,
+    roots,
     storage,
+    services,
+    system,
+    addUploads,
+    refresh,
     pushToast,
-    liveSystem,
   } = useApp()
-  const [target, setTarget] = useState('/Downloads')
+  const [target, setTarget] = useState('/')
   const [dragging, setDragging] = useState(false)
   const uploadRef = useRef<HTMLInputElement>(null)
-  const monitorApp = APP_BY_ID.get('monitor')
-  const telemetry = useTelemetry(liveSystem)
 
-  const apps = APP_CATALOG.filter((app) => installed[app.id])
+  useEffect(() => {
+    if (roots.length && !roots.some((root) => root.path === target)) {
+      setTarget(roots[0].path)
+    }
+  }, [roots, target])
+
+  const runningServices = services.filter((service) => service.running)
   const notices = notifications.slice(0, 3)
   const recentFiles = [...files]
     .sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())
     .slice(0, 5)
 
+  const userFor = (owner: string) =>
+    users.find((user) => user.account === owner) ?? users.find((user) => user.email === owner)
+
+  const tiles: Tile[] = [
+    ...BUILTIN_APPS.map((app) => ({
+      id: app.id,
+      name: app.name,
+      icon: app.icon,
+      accent: app.accent,
+      running: true,
+      onLaunch: () => navigate(app.internalRoute, { path: app.internalPath }),
+    })),
+    ...runningServices.slice(0, 2).map((service) => ({
+      id: service.id,
+      name: service.name,
+      icon: 'Activity',
+      accent: '#38bdf8',
+      running: service.running,
+      onLaunch: () => navigate('apps'),
+    })),
+  ]
+
   const handleUploads = (list: FileList | null) => {
     if (!list || list.length === 0) return
-    addUploads(
-      target,
-      Array.from(list).map((file) => ({ name: file.name, size: file.size })),
-    )
+    void addUploads(target, Array.from(list))
     if (uploadRef.current) uploadRef.current.value = ''
   }
 
-  const runHealthCheck = () => {
+  const runHealthCheck = async () => {
+    await refresh()
     pushToast({
-      title: 'No issues found',
-      description: 'Pools, disks and services all report healthy.',
+      title: 'State refreshed',
+      description: `${storage.pools.length} volumes and ${services.length} units read from the host.`,
       tone: 'success',
     })
   }
@@ -330,16 +379,10 @@ export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardPro
   return (
     <div className="dashboard">
       <aside className="dash-left" aria-label="System widgets">
-        <ClockCard uptimeDays={telemetry.uptimeDays} />
-        <SystemCard
-          onDetails={() => monitorApp && onLaunchApp(monitorApp)}
-          telemetry={telemetry}
-        />
+        <ClockCard />
+        <SystemCard onDetails={() => navigate('settings', { tab: 'about' })} />
         <StorageCard onOpen={() => navigate('storage')} />
-        <NetworkCard
-          onDetails={() => monitorApp && onLaunchApp(monitorApp)}
-          telemetry={telemetry}
-        />
+        <NetworkCard />
         <button
           type="button"
           className="widget-settings card"
@@ -358,7 +401,7 @@ export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardPro
           <span className="dash-search__icon" aria-hidden="true">
             <Search size={17} />
           </span>
-          <span className="dash-search__placeholder">Search files, apps, and commands…</span>
+          <span className="dash-search__placeholder">Search files, services, and commands…</span>
           <span className="dash-search__hint" aria-hidden="true">
             <kbd>⌘</kbd>
             <kbd>K</kbd>
@@ -417,12 +460,12 @@ export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardPro
               <span className="notice-card__icon" aria-hidden="true">
                 <CircleCheckBig size={17} />
               </span>
-              <h3>All caught up</h3>
-              <p>No alerts need your attention. Orion keeps watching in the background.</p>
+              <h3>Nothing needs attention</h3>
+              <p>Volumes are below 90% and every Orion unit is running.</p>
               <div className="notice-card__footer">
-                <span className="dim">System healthy</span>
+                <span className="dim">Read from the host</span>
                 <button type="button" className="notice-card__action" onClick={runHealthCheck}>
-                  Run check
+                  Refresh
                   <ArrowRight size={13} aria-hidden="true" />
                 </button>
               </div>
@@ -434,7 +477,9 @@ export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardPro
           <header className="section-head">
             <div>
               <h2>Apps</h2>
-              <span>{apps.length} installed</span>
+              <span>
+                {BUILTIN_APPS.length} pages · {runningServices.length} services running
+              </span>
             </div>
             <div className="section-head__actions">
               <button type="button" className="text-button" onClick={() => navigate('apps')}>
@@ -452,8 +497,8 @@ export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardPro
           </header>
 
           <div className="apps-grid">
-            {apps.map((app) => (
-              <AppTile key={app.id} app={app} onLaunch={() => onLaunchApp(app)} />
+            {tiles.map((tile) => (
+              <AppTile key={tile.id} tile={tile} />
             ))}
             <button
               type="button"
@@ -463,8 +508,8 @@ export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardPro
               <span className="app-tile__add-icon" aria-hidden="true">
                 <Plus size={22} />
               </span>
-              <span className="app-tile__name">Add apps</span>
-              <span className="app-tile__status">One-click install</span>
+              <span className="app-tile__name">Services</span>
+              <span className="app-tile__status">{services.length} units</span>
             </button>
           </div>
         </div>
@@ -474,7 +519,7 @@ export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardPro
             <header className="section-head">
               <div>
                 <h2 id="activity-title">Recent activity</h2>
-                <span>Across all shares</span>
+                <span>Most recently modified on the volume</span>
               </div>
               <button type="button" className="text-button" onClick={() => navigate('files')}>
                 Open Files
@@ -483,15 +528,13 @@ export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardPro
             <ul className="activity-list">
               {recentFiles.map((file) => {
                 const Icon = FILE_ICONS[file.tone]
-                const owner = users.find((user) => user.id === file.owner)?.name.split(' ')[0]
+                const owner = userFor(file.owner)
                 return (
                   <li key={file.id}>
                     <button
                       type="button"
                       className="activity-row"
-                      onClick={() =>
-                        navigate('files', { path: file.parent, highlight: file.id })
-                      }
+                      onClick={() => navigate('files', { path: file.parent, highlight: file.id })}
                     >
                       <span className={`file-glyph file-glyph--${file.tone}`} aria-hidden="true">
                         <Icon size={15} />
@@ -499,14 +542,18 @@ export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardPro
                       <span className="activity-row__copy">
                         <strong>{file.name}</strong>
                         <span>
-                          {file.parent === '/' ? 'Home' : file.parent} · {relativeTime(file.modifiedAt)}
+                          {file.parent === '/' ? 'Root' : file.parent} ·{' '}
+                          {relativeTime(file.modifiedAt)}
                         </span>
                       </span>
-                      <span className="activity-row__actor">{owner ?? 'System'}</span>
+                      <span className="activity-row__actor">{owner?.name ?? file.owner}</span>
                     </button>
                   </li>
                 )
               })}
+              {recentFiles.length === 0 ? (
+                <li className="dim">The volume is empty. Upload something to see it here.</li>
+              ) : null}
             </ul>
           </section>
 
@@ -514,7 +561,7 @@ export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardPro
             <header className="section-head">
               <div>
                 <h2 id="transfer-title">Quick transfer</h2>
-                <span>Drop files straight into Orion</span>
+                <span>Drop files straight onto the volume</span>
               </div>
               <Upload size={16} aria-hidden="true" className="dim" />
             </header>
@@ -544,10 +591,11 @@ export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardPro
                   onChange={(event) => setTarget(event.target.value)}
                   aria-label="Upload destination"
                 >
-                  <option value="/Downloads">Downloads</option>
-                  <option value="/Photos/Camera Roll">Photos</option>
-                  <option value="/Documents">Documents</option>
-                  <option value="/Shared/Public">Shared / Public</option>
+                  {roots.map((root) => (
+                    <option key={root.path} value={root.path}>
+                      {root.label}
+                    </option>
+                  ))}
                 </select>
               </label>
               <button
@@ -566,8 +614,8 @@ export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardPro
               />
             </div>
             <div className="transfer-foot">
-              <Camera size={13} aria-hidden="true" />
-              <span>Media is indexed automatically</span>
+              <HardDrive size={13} aria-hidden="true" />
+              <span>Written to {storage.pools.find((pool) => pool.name === 'Files')?.mount ?? '/srv/storage'}</span>
               <span className="transfer-foot__limit">Max 2 GB / file</span>
             </div>
           </section>
@@ -575,19 +623,13 @@ export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardPro
 
         <div className="dashboard-footer-note">
           <span>
-            <span className={settings.security.remoteAccess ? 'live-dot' : 'dim-dot'} aria-hidden="true" />
-            {settings.security.remoteAccess ? 'Remote access enabled' : 'Local network only'}
+            <span className="live-dot" aria-hidden="true" />
+            {system?.identity ? `Signed in as ${system.identity.email}` : 'Signed in at the edge'}
           </span>
           <span className="dim">·</span>
-          <span>{liveSystem?.hostname ?? settings.hostname}</span>
+          <span>{system?.hostname ?? '…'}</span>
           <span className="dim">·</span>
-          <span>
-            {formatTb(
-              storage.pools.reduce((sum, pool) => sum + pool.usedTb, 0),
-              1,
-            )}{' '}
-            managed
-          </span>
+          <span>{formatBytes(storage.files.bytes)} in {storage.files.count} files</span>
         </div>
       </section>
     </div>

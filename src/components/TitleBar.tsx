@@ -150,12 +150,9 @@ interface TitleBarProps {
 }
 
 export function TitleBar({ resolvedTheme, onToggleTheme, onOpenPalette, navigate }: TitleBarProps) {
-  const { settings, users, mode, liveSystem } = useApp()
+  const { system, users } = useApp()
   const currentUser = users.find((user) => user.isCurrent) ?? users[0]
-  const hostname = liveSystem?.hostname ?? settings.hostname
-  const address = liveSystem
-    ? `${liveSystem.cpu.cores} cores · ${liveSystem.arch}`
-    : settings.network.ip
+  const address = system?.network.ip || 'no address'
 
   return (
     <header className="titlebar">
@@ -184,11 +181,11 @@ export function TitleBar({ resolvedTheme, onToggleTheme, onOpenPalette, navigate
           type="button"
           className="device-chip"
           onClick={() => navigate('settings', { tab: 'general' })}
-          title={`${hostname} · ${address}`}
+          title={`${system?.hostname ?? 'Orion'} · ${address}`}
         >
           <Server size={14} aria-hidden="true" />
           <span className="device-chip__copy">
-            <strong>{hostname}</strong>
+            <strong>{system?.hostname ?? 'connecting'}</strong>
             <span>{address}</span>
           </span>
           <span className="device-chip__status" aria-label="System online" />
@@ -202,23 +199,16 @@ export function TitleBar({ resolvedTheme, onToggleTheme, onOpenPalette, navigate
         aria-label="Open command palette"
       >
         <Search size={16} aria-hidden="true" />
-        <span>Search files, apps, and commands</span>
+        <span>Search files, services, and commands</span>
         <kbd>
           <span className="key-mod">⌘</span>K
         </kbd>
       </button>
 
       <div className="titlebar__actions">
-        <span
-          className="titlebar__system"
-          title={
-            mode === 'live'
-              ? 'Reading this machine: real files, disks and metrics'
-              : 'No server detected — showing the built-in demo dataset'
-          }
-        >
+        <span className="titlebar__system">
           <span className="live-dot" aria-hidden="true" />
-          {mode === 'live' ? 'Live host' : 'Demo data'}
+          Online
         </span>
         <button
           type="button"
@@ -242,7 +232,7 @@ export function TitleBar({ resolvedTheme, onToggleTheme, onOpenPalette, navigate
           title={currentUser?.name}
         >
           <Avatar
-            name={currentUser?.name ?? 'Alex Morgan'}
+            name={currentUser?.name ?? 'Signed in'}
             color={currentUser?.color ?? '#0a63ff'}
             size="sm"
           />

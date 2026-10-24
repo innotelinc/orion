@@ -18,7 +18,7 @@ const NAV_ITEMS: Array<{
 }> = [
   { name: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { name: 'files', label: 'Files', icon: FolderOpen },
-  { name: 'apps', label: 'App Store', icon: Store },
+  { name: 'apps', label: 'Services', icon: Store },
   { name: 'storage', label: 'Storage', icon: HardDrive },
   { name: 'settings', label: 'Settings', icon: Settings },
 ]
@@ -29,7 +29,7 @@ interface NavRailProps {
 }
 
 export function NavRail({ route, navigate }: NavRailProps) {
-  const { pushToast } = useApp()
+  const { system, services } = useApp()
 
   return (
     <nav className="rail" aria-label="Primary navigation">
@@ -59,22 +59,16 @@ export function NavRail({ route, navigate }: NavRailProps) {
         <button
           type="button"
           className="rail__item"
-          aria-label="Help and documentation"
-          onClick={() =>
-            pushToast({
-              title: 'Help is on the way',
-              description: 'Docs would open at orion.local/help in the full build.',
-              tone: 'info',
-            })
-          }
+          aria-label={`Services: ${services.filter((service) => service.running).length} running`}
+          onClick={() => navigate('apps')}
         >
           <CircleHelp size={20} aria-hidden="true" />
           <span className="rail__tip" role="tooltip">
-            Help
+            Services
           </span>
         </button>
         <span className="rail__version" aria-hidden="true">
-          1.4
+          {system?.version.version ?? '—'}
         </span>
       </div>
     </nav>

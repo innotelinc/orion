@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
-import { AppPanel } from './components/AppPanel'
 import { CommandPalette } from './components/CommandPalette'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { NavRail } from './components/NavRail'
@@ -13,21 +12,19 @@ import { Files } from './views/Files'
 import { AppStore } from './views/AppStore'
 import { Storage } from './views/Storage'
 import { Settings } from './views/Settings'
-import type { AppDefinition } from './types'
 
 const PAGE_TITLES: Record<RouteName, string> = {
   dashboard: 'Dashboard',
   files: 'Files',
-  apps: 'App Store',
+  apps: 'Services',
   storage: 'Storage',
   settings: 'Settings',
 }
 
 export default function App() {
-  const { settings, updateSettings } = useApp()
+  const { settings, updateSettings, error, refresh } = useApp()
   const { route, navigate } = useRoute()
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const [activeApp, setActiveApp] = useState<AppDefinition | null>(null)
   const systemDark = useMediaQuery('(prefers-color-scheme: dark)')
   const resolvedTheme =
     settings.theme === 'system' ? (systemDark ? 'dark' : 'light') : settings.theme
@@ -71,17 +68,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKey)
   }, [])
 
-  const launchApp = useCallback(
-    (app: AppDefinition) => {
-      if (app.internalRoute) {
-        navigate(app.internalRoute, { path: app.internalPath })
-      } else {
-        setActiveApp(app)
-      }
-    },
-    [navigate],
-  )
-
   const toggleTheme = useCallback(() => {
     updateSettings({ theme: resolvedTheme === 'dark' ? 'light' : 'dark' })
   }, [resolvedTheme, updateSettings])
@@ -108,13 +94,19 @@ export default function App() {
       <div className="shell">
         <NavRail route={route.name} navigate={navigate} />
         <main id="main-content" className="main" tabIndex={-1}>
+          {error ? (
+            <div className="api-banner" role="alert">
+              <span>
+                <strong>The API is not answering.</strong> {error}
+              </span>
+              <button type="button" className="text-button" onClick={() => void refresh()}>
+                Retry
+              </button>
+            </div>
+          ) : null}
           <ErrorBoundary key={`${route.name}-${route.path ?? 'root'}`}>
             {route.name === 'dashboard' ? (
-              <Dashboard
-                navigate={navigate}
-                onLaunchApp={launchApp}
-                onOpenPalette={() => setPaletteOpen(true)}
-              />
+              <Dashboard navigate={navigate} onOpenPalette={() => setPaletteOpen(true)} />
             ) : null}
             {route.name === 'files' ? (
               <Files
@@ -123,9 +115,7 @@ export default function App() {
                 highlightId={route.highlight}
               />
             ) : null}
-            {route.name === 'apps' ? (
-              <AppStore navigate={navigate} onLaunchApp={launchApp} />
-            ) : null}
+            {route.name === 'apps' ? <AppStore navigate={navigate} /> : null}
             {route.name === 'storage' ? <Storage /> : null}
             {route.name === 'settings' ? (
               <Settings
@@ -141,10 +131,8 @@ export default function App() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         navigate={navigate}
-        onLaunchApp={launchApp}
         resolvedTheme={resolvedTheme}
       />
-      <AppPanel app={activeApp} onClose={() => setActiveApp(null)} />
       <ToastRegion />
     </div>
   )

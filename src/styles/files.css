@@ -1014,3 +1014,14 @@ html[data-theme='light'] .file-table thead th {
     width: 88vw;
   }
 }
+
+/* Real image preview in the details drawer -------------------------------- */
+
+.files-details__thumb {
+  width: 54px;
+  height: 54px;
+  border-radius: 9px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  background: var(--surface-3);
+}

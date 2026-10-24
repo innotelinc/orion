@@ -29,7 +29,8 @@ import {
   Users,
   X,
 } from 'lucide-react'
-import { FILE_ROOTS, joinPath } from '../data/files'
+import { joinPath } from '../data/files'
+import { downloadUrl } from '../lib/api'
 import { useApp } from '../context/AppContext'
 import { classNames, formatBytes, formatFullDateTime, formatPercent, relativeTime } from '../lib/format'
 import { Avatar } from '../components/ui/Avatar'
@@ -51,6 +52,18 @@ const FILE_ICONS: Record<FileTone, typeof File> = {
   archive: FileArchive,
   code: FileCode,
   file: File,
+}
+
+function iconForRoot(name: string) {
+  const key = name.toLowerCase()
+  if (key.includes('photo') || key.includes('image')) return 'Images'
+  if (key.includes('media') || key.includes('video') || key.includes('movie')) return 'PlayCircle'
+  if (key.includes('doc')) return 'FileText'
+  if (key.includes('backup')) return 'ArchiveRestore'
+  if (key.includes('download')) return 'ArrowDownToLine'
+  if (key.includes('share') || key.includes('public')) return 'Users'
+  if (key.includes('music')) return 'Music'
+  return 'FolderOpen'
 }
 
 const TYPE_LABELS: Record<FileTone, string> = {
@@ -76,6 +89,7 @@ interface FilesProps {
 export function Files({ navigate, initialPath, highlightId }: FilesProps) {
   const {
     files,
+    roots,
     storage,
     users,
     settings,
@@ -85,8 +99,6 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
     deleteFiles,
     toggleStar,
     pushToast,
-    mode,
-    loadDirectory,
   } = useApp()
 
   const currentPath = initialPath ?? '/'
@@ -129,8 +141,8 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
   const allSelected = entries.length > 0 && entries.every((node) => selectedIds.has(node.id))
   const someSelected = entries.some((node) => selectedIds.has(node.id))
 
-  const totalUsed = storage.pools.reduce((total, pool) => total + pool.usedTb, 0)
-  const totalCapacity = storage.pools.reduce((total, pool) => total + pool.totalTb, 0)
+  const totalUsed = storage.pools.reduce((total, pool) => total + pool.usedBytes, 0)
+  const totalCapacity = storage.pools.reduce((total, pool) => total + pool.totalBytes, 0)
   const usedPercent = formatPercent(totalUsed, totalCapacity)
   const folderSize = entries.reduce((total, node) => total + (node.size ?? 0), 0)
 
@@ -147,24 +159,6 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
     }, 180)
     return () => window.clearTimeout(timer)
   }, [files, highlightId])
-
-  // The host is the source of truth for what is in a directory: ask it every
-  // time the path changes, so a file added over SMB shows up on the next visit.
-  useEffect(() => {
-    if (mode === 'live') void loadDirectory(currentPath)
-  }, [currentPath, loadDirectory, mode])
-
-  const sidebarRoots = useMemo(() => {
-    if (mode !== 'live') return FILE_ROOTS
-    // In live mode the sidebar is whatever the host actually exposes.
-    return files
-      .filter((node) => node.parent === '/' && node.type === 'folder')
-      .map((node) => ({
-        path: `/${node.name}`,
-        label: node.name,
-        icon: 'FolderOpen',
-      }))
-  }, [files, mode])
 
   const breadcrumbs = useMemo(() => {
     const segments = currentPath.split('/').filter(Boolean)
@@ -201,15 +195,12 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
 
   const handleUploads = (list: FileList | null) => {
     if (!list || list.length === 0) return
-    addUploads(
-      currentPath,
-      Array.from(list).map((file) => ({ name: file.name, size: file.size })),
-    )
+    void addUploads(currentPath, Array.from(list))
     if (uploadRef.current) uploadRef.current.value = ''
   }
 
-  const createFolder = () => {
-    const result = addFolder(currentPath, newFolderName)
+  const createFolder = async () => {
+    const result = await addFolder(currentPath, newFolderName)
     if (!result.ok) {
       setNewFolderError(result.error ?? 'Could not create that folder.')
       return
@@ -219,9 +210,9 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
     setNewFolderError(null)
   }
 
-  const submitRename = () => {
+  const submitRename = async () => {
     if (!renameTarget) return
-    const result = renameFile(renameTarget.id, renameValue)
+    const result = await renameFile(renameTarget.id, renameValue)
     if (!result.ok) {
       setRenameError(result.error ?? 'Could not rename that item.')
       return
@@ -231,7 +222,7 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
   }
 
   const confirmDelete = () => {
-    deleteFiles(Array.from(selectedIds))
+    void deleteFiles(Array.from(selectedIds))
     setSelectedIds(new Set())
     setDeleteOpen(false)
   }
@@ -245,7 +236,8 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
     }
   }
 
-  const userFor = (owner: string) => users.find((user) => user.id === owner)
+  const userFor = (owner: string) =>
+    users.find((user) => user.account === owner) ?? users.find((user) => user.id === owner)
 
   return (
     <section className="view files-view">
@@ -313,8 +305,8 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
               <span>All files</span>
               <small>{files.filter((file) => file.parent === '/').length}</small>
             </button>
-            {sidebarRoots.map((root) => {
-              const Icon = iconFor(root.icon)
+            {roots.map((root) => {
+              const Icon = iconFor(iconForRoot(root.label))
               const active = currentPath === root.path || currentPath.startsWith(`${root.path}/`)
               return (
                 <button
@@ -338,7 +330,7 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
             </div>
             <ProgressBar value={usedPercent} label="Pool storage used" />
             <p className="tabular">
-              {totalUsed.toFixed(1)} TB of {totalCapacity.toFixed(0)} TB
+              {formatBytes(totalUsed)} of {formatBytes(totalCapacity)}
             </p>
             <button type="button" className="text-button" onClick={() => navigate('storage')}>
               Manage pools
@@ -764,14 +756,25 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
           ) : activeNode ? (
             <div className="files-details__content">
               <div className="files-details__preview">
-                {(() => {
-                  const Icon = FILE_ICONS[activeNode.tone]
-                  return (
-                    <span className={`file-glyph file-glyph--${activeNode.tone} file-glyph--xl`} aria-hidden="true">
-                      <Icon size={30} />
-                    </span>
-                  )
-                })()}
+                {activeNode.type === 'file' && activeNode.tone === 'image' ? (
+                  <img
+                    className="files-details__thumb"
+                    src={downloadUrl(activeNode.id, true)}
+                    alt=""
+                  />
+                ) : (
+                  (() => {
+                    const Icon = FILE_ICONS[activeNode.tone]
+                    return (
+                      <span
+                        className={`file-glyph file-glyph--${activeNode.tone} file-glyph--xl`}
+                        aria-hidden="true"
+                      >
+                        <Icon size={30} />
+                      </span>
+                    )
+                  })()
+                )}
                 <div>
                   <strong>{activeNode.name}</strong>
                   <span>{TYPE_LABELS[activeNode.tone]}</span>
@@ -812,20 +815,14 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
                     Open folder
                   </button>
                 ) : (
-                  <button
-                    type="button"
+                  <a
                     className="button button--sm button--block button--primary"
-                    onClick={() =>
-                      pushToast({
-                        title: 'Download prepared',
-                        description: `${activeNode.name} is ready (front-end demo).`,
-                        tone: 'info',
-                      })
-                    }
+                    href={downloadUrl(activeNode.id)}
+                    download={activeNode.name}
                   >
                     <Download size={13} aria-hidden="true" />
                     Download
-                  </button>
+                  </a>
                 )}
                 <div className="files-details__action-row">
                   <button
@@ -913,7 +910,7 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
           id="new-folder-form"
           onSubmit={(event) => {
             event.preventDefault()
-            createFolder()
+            void createFolder()
           }}
         >
           <div className="field">
@@ -968,7 +965,7 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
           id="rename-form"
           onSubmit={(event) => {
             event.preventDefault()
-            submitRename()
+            void submitRename()
           }}
         >
           <div className="field">

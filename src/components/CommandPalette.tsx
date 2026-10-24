@@ -17,11 +17,11 @@ import {
   Sparkles,
   type LucideIcon,
 } from 'lucide-react'
-import { APP_BY_ID, APP_CATALOG } from '../data/apps'
+import { BUILTIN_APPS } from '../data/apps'
 import { useApp } from '../context/AppContext'
 import { classNames, formatBytes } from '../lib/format'
 import { iconFor } from '../lib/icons'
-import type { AppDefinition, FileTone } from '../types'
+import type { FileTone } from '../types'
 import type { NavigateOptions, RouteName } from '../hooks/useRoute'
 
 const FILE_ICONS: Record<FileTone, LucideIcon> = {
@@ -49,7 +49,6 @@ interface CommandPaletteProps {
   open: boolean
   onClose: () => void
   navigate: (name: RouteName, options?: NavigateOptions) => void
-  onLaunchApp: (app: AppDefinition) => void
   resolvedTheme: 'dark' | 'light'
 }
 
@@ -57,11 +56,9 @@ export function CommandPalette({
   open,
   onClose,
   navigate,
-  onLaunchApp,
   resolvedTheme,
 }: CommandPaletteProps) {
-  const { files, installed, settings, updateSettings, notifications, markAllRead, pushToast } =
-    useApp()
+  const { files, updateSettings, notifications, markAllRead, pushToast, system } = useApp()
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const dialogRef = useRef<HTMLDialogElement>(null)
@@ -110,8 +107,8 @@ export function CommandPalette({
       },
       {
         id: 'nav-apps',
-        label: 'Go to App Store',
-        description: 'Install a self-hosted app in one click',
+        label: 'Go to Services',
+        description: 'systemd units on this host',
         group: 'Navigate',
         icon: iconFor('Store'),
         run: () => navigate('apps'),
@@ -119,7 +116,7 @@ export function CommandPalette({
       {
         id: 'nav-storage',
         label: 'Go to Storage',
-        description: 'Pools, disks and health',
+        description: 'Volumes and devices',
         group: 'Navigate',
         icon: iconFor('ArchiveRestore'),
         run: () => navigate('storage'),
@@ -162,28 +159,25 @@ export function CommandPalette({
       },
       {
         id: 'action-copy',
-        label: 'Copy device address',
-        description: `${settings.hostname} · ${settings.network.ip}`,
+        label: 'Copy host address',
+        description: `${system?.hostname ?? 'host'} · ${system?.network.ip || 'unknown'}`,
         group: 'Actions',
         icon: Sparkles,
         run: () => {
+          const address = system?.network.ip
+          if (!address) {
+            pushToast({ title: 'No address reported', tone: 'error' })
+            return
+          }
           if (!navigator.clipboard) {
-            pushToast({
-              title: 'Clipboard unavailable',
-              description: `The address is ${settings.network.ip}`,
-              tone: 'error',
-            })
+            pushToast({ title: 'Clipboard unavailable', description: address, tone: 'error' })
             return
           }
           void navigator.clipboard
-            .writeText(settings.network.ip)
-            .then(() => pushToast({ title: 'Address copied', description: settings.network.ip, tone: 'success' }))
+            .writeText(address)
+            .then(() => pushToast({ title: 'Address copied', description: address, tone: 'success' }))
             .catch(() =>
-              pushToast({
-                title: 'Clipboard unavailable',
-                description: `The address is ${settings.network.ip}`,
-                tone: 'error',
-              }),
+              pushToast({ title: 'Clipboard unavailable', description: address, tone: 'error' }),
             )
         },
       },
@@ -214,26 +208,18 @@ export function CommandPalette({
     const appCommands: Command[] =
       normalised.length < 1
         ? []
-        : APP_CATALOG.filter((app) =>
-            `${app.name} ${app.tagline} ${app.category}`.toLowerCase().includes(normalised),
+        : BUILTIN_APPS.filter((app) =>
+            `${app.name} ${app.tagline} ${app.description}`.toLowerCase().includes(normalised),
           )
             .slice(0, 5)
-            .map((app) => {
-              const installedApp = installed[app.id]
-              return {
-                id: `app-${app.id}`,
-                label: installedApp ? `Open ${app.name}` : `Find ${app.name} in App Store`,
-                description: installedApp
-                  ? `${app.category} · ${installedApp.running ? 'Running' : 'Stopped'}`
-                  : `${app.category} · Not installed`,
-                group: 'Apps',
-                icon: APP_BY_ID.has(app.id) ? iconFor(app.icon) : Sparkles,
-                run: () => {
-                  if (installedApp) onLaunchApp(app)
-                  else navigate('apps')
-                },
-              }
-            })
+            .map((app) => ({
+              id: `app-${app.id}`,
+              label: `Open ${app.name}`,
+              description: app.tagline,
+              group: 'Apps',
+              icon: iconFor(app.icon),
+              run: () => navigate(app.internalRoute, { path: app.internalPath }),
+            }))
 
     const all = [...navCommands, ...fileCommands, ...appCommands, ...actionCommands]
     if (!normalised) return all
@@ -243,16 +229,13 @@ export function CommandPalette({
     })
   }, [
     files,
-    installed,
     markAllRead,
     navigate,
     notifications,
-    onLaunchApp,
     pushToast,
     query,
     resolvedTheme,
-    settings.hostname,
-    settings.network.ip,
+    system,
     updateSettings,
   ])
 

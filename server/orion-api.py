@@ -1,0 +1,941 @@
+#!/usr/bin/env python3
+"""Orion's API — the real machine, not a seeded one.
+
+The desktop used to invent its files, disks and counters in the browser. This
+service replaces that: one JSON surface over the container it runs in.
+
+    /srv/storage                  the data volume the Files app browses
+    /srv/storage/.orion/trash     "delete" moves here, never unlinks
+    /srv/storage/.orion/starred   per-path star flags
+
+Read-only facts come from /proc, /sys and systemd; the only mutating calls are
+the file operations and service start/stop/restart, and both are restricted to
+this container. nginx puts this behind the same sign-in as the desktop, and the
+vhost only accepts the edge proxy's address, so the port is never public.
+
+    python3 orion-api.py            # 127.0.0.1:8099
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import threading
+import time
+import urllib.parse
+from collections import deque
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+ROOT = Path(os.environ.get("ORION_ROOT", "/srv/storage")).resolve()
+META = ROOT / ".orion"
+TRASH = META / "trash"
+STARS = META / "starred.json"
+VERSION_FILE = Path(os.environ.get("ORION_VERSION_FILE", "/opt/orion/version.json"))
+BIND = os.environ.get("ORION_BIND", "127.0.0.1")
+PORT = int(os.environ.get("ORION_PORT", "8099"))
+MAX_NODES = 20_000
+HISTORY = 60
+SAMPLE_SECONDS = 2.0
+
+TONE_BY_EXTENSION = {
+    "image": {"jpg", "jpeg", "png", "heic", "heif", "webp", "gif", "svg", "avif", "raw", "tif", "tiff"},
+    "video": {"mp4", "mkv", "mov", "avi", "webm", "m4v"},
+    "audio": {"mp3", "flac", "wav", "m4a", "m4b", "ogg", "opus"},
+    "document": {"pdf", "doc", "docx", "txt", "md", "rtf", "odt"},
+    "sheet": {"xls", "xlsx", "csv", "ods", "numbers"},
+    "archive": {"zip", "tar", "gz", "zst", "7z", "rar", "iso", "snap", "pkg", "xz", "bz2"},
+    "code": {"js", "ts", "tsx", "jsx", "json", "css", "html", "py", "sh", "yml", "yaml", "toml", "rs", "go", "c", "h"},
+}
+
+UNIT_PATTERN = re.compile(r"^[A-Za-z0-9@._:-]+\.service$")
+
+
+def tone_for(name: str) -> str:
+    suffix = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    for tone, extensions in TONE_BY_EXTENSION.items():
+        if suffix in extensions:
+            return tone
+    return "file"
+
+
+def read_text(path: str, default: str = "") -> str:
+    try:
+        return Path(path).read_text().strip()
+    except OSError:
+        return default
+
+
+# ---------------------------------------------------------------- filesystem
+
+
+def safe_path(virtual: str) -> Path:
+    """Map a desktop path (/media/film.mkv) to a real one, refusing escapes."""
+    if not virtual.startswith("/"):
+        raise ValueError("paths must be absolute")
+    candidate = (ROOT / virtual.lstrip("/")).resolve()
+    if candidate != ROOT and ROOT not in candidate.parents:
+        raise ValueError("path escapes the storage root")
+    return candidate
+
+
+def virtual_path(path: Path) -> str:
+    relative = path.relative_to(ROOT).as_posix()
+    return "/" if relative in ("", ".") else f"/{relative}"
+
+
+def load_stars() -> set[str]:
+    try:
+        payload = json.loads(STARS.read_text())
+        return {str(item) for item in payload if isinstance(item, str)}
+    except (OSError, ValueError):
+        return set()
+
+
+def save_stars(stars: set[str]) -> None:
+    META.mkdir(parents=True, exist_ok=True)
+    STARS.write_text(json.dumps(sorted(stars), indent=2) + "\n")
+
+
+def scan_files() -> list[dict]:
+    """Every entry under the volume, flat — the shape the desktop already routes on."""
+    stars = load_stars()
+    nodes: list[dict] = []
+    stack = [ROOT]
+    while stack and len(nodes) < MAX_NODES:
+        directory = stack.pop()
+        try:
+            entries = list(os.scandir(directory))
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.name.startswith("."):
+                continue
+            try:
+                is_dir = entry.is_dir(follow_symlinks=False)
+                if not is_dir and not entry.is_file(follow_symlinks=False):
+                    continue
+                stat = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            path = Path(entry.path)
+            nodes.append(
+                {
+                    "id": virtual_path(path),
+                    "name": entry.name,
+                    "parent": virtual_path(path.parent),
+                    "type": "folder" if is_dir else "file",
+                    "size": None if is_dir else stat.st_size,
+                    "modifiedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stat.st_mtime)),
+                    "owner": "root",
+                    "tone": "folder" if is_dir else tone_for(entry.name),
+                    "starred": virtual_path(path) in stars,
+                }
+            )
+            if is_dir:
+                stack.append(path)
+    return nodes
+
+
+def unique_child(parent: Path, name: str) -> Path:
+    candidate = parent / name
+    if not candidate.exists():
+        return candidate
+    stem, dot, suffix = name.rpartition(".")
+    counter = 2
+    while True:
+        next_name = f"{stem} ({counter}){dot}{suffix}" if dot else f"{name} ({counter})"
+        candidate = parent / next_name
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def clean_name(raw: str) -> str:
+    name = (raw or "").strip()
+    if not name or name in (".", "..") or "/" in name or "\\" in name or "\0" in name:
+        raise ValueError("that name cannot be used")
+    if len(name) > 120:
+        raise ValueError("keep names under 120 characters")
+    return name
+
+
+def copy_body(handle, stream, length: int | None, chunked: bool) -> int:
+    """Copy a request body, honouring either Content-Length or chunked framing."""
+    written = 0
+    if chunked:
+        while True:
+            header = stream.readline().strip()
+            if not header:
+                break
+            size = int(header.split(b";")[0], 16)
+            if size == 0:
+                # Trailers, then a blank line.
+                while stream.readline().strip():
+                    pass
+                break
+            remaining = size
+            while remaining:
+                chunk = stream.read(min(262_144, remaining))
+                if not chunk:
+                    raise ValueError("upload ended mid-chunk")
+                handle.write(chunk)
+                written += len(chunk)
+                remaining -= len(chunk)
+            stream.readline()
+        return written
+
+    remaining = length
+    while remaining is None or remaining > 0:
+        chunk = stream.read(262_144 if remaining is None else min(262_144, remaining))
+        if not chunk:
+            break
+        handle.write(chunk)
+        written += len(chunk)
+        if remaining is not None:
+            remaining -= len(chunk)
+    return written
+
+
+def upload_stream(
+    directory: Path, name: str, stream, length: int | None, chunked: bool = False
+) -> dict:
+    target = unique_child(directory, clean_name(name))
+    with open(target, "xb") as handle:
+        try:
+            copy_body(handle, stream, length, chunked)
+        except ValueError:
+            handle.close()
+            target.unlink(missing_ok=True)
+            raise
+    stat = target.stat()
+    return {
+        "id": virtual_path(target),
+        "name": target.name,
+        "parent": virtual_path(directory),
+        "type": "file",
+        "size": stat.st_size,
+        "modifiedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stat.st_mtime)),
+        "owner": "root",
+        "tone": tone_for(target.name),
+        "starred": False,
+    }
+
+
+def move_to_trash(paths: list[str]) -> int:
+    TRASH.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    for virtual in paths:
+        target = safe_path(virtual)
+        if target == ROOT or not target.exists():
+            continue
+        destination = unique_child(TRASH, target.name)
+        shutil.move(str(target), str(destination))
+        moved += 1
+    return moved
+
+
+# --------------------------------------------------------------- host facts
+
+
+def default_interface() -> str:
+    for line in read_text("/proc/net/route").splitlines()[1:]:
+        fields = line.split()
+        if len(fields) > 2 and fields[1] == "00000000":
+            return fields[0]
+    return "eth0"
+
+
+def ipv4_from_hex(value: str) -> str:
+    return ".".join(str(int(value[index : index + 2], 16)) for index in (6, 4, 2, 0))
+
+
+def network_facts() -> dict:
+    interface = default_interface()
+    address = ""
+    prefix = ""
+    try:
+        output = subprocess.run(
+            ["ip", "-4", "-o", "addr", "show", interface],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        ).stdout.split()
+        if "inet" in output:
+            cidr = output[output.index("inet") + 1]
+            address, _, prefix = cidr.partition("/")
+    except (OSError, subprocess.SubprocessError):
+        pass
+    gateway = ""
+    for line in read_text("/proc/net/route").splitlines()[1:]:
+        fields = line.split()
+        if len(fields) > 2 and fields[1] == "00000000":
+            gateway = ipv4_from_hex(fields[2])
+            break
+    dns = []
+    try:
+        # systemd-resolved owns /etc/resolv.conf here (127.0.0.53), so the
+        # upstream servers are the useful ones to report.
+        resolved = subprocess.run(
+            ["resolvectl", "dns"], capture_output=True, text=True, timeout=3
+        ).stdout
+        for line in resolved.splitlines():
+            _, _, servers = line.partition(":")
+            dns.extend(server for server in servers.split() if server.count(".") == 3)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if not dns:
+        dns = [
+            line.split()[1]
+            for line in read_text("/etc/resolv.conf").splitlines()
+            if line.startswith("nameserver") and len(line.split()) > 1
+        ]
+    speed = None
+    raw_speed = read_text(f"/sys/class/net/{interface}/speed")
+    if raw_speed.isdigit() and int(raw_speed) > 0:
+        speed = int(raw_speed)
+    return {
+        "interface": interface,
+        "method": "static" if gateway else "dhcp",
+        "ip": address,
+        "prefix": prefix,
+        "gateway": gateway,
+        "dns": dns,
+        "mac": read_text(f"/sys/class/net/{interface}/address"),
+        "linkMbps": speed,
+    }
+
+
+def memory_facts() -> dict:
+    values: dict[str, int] = {}
+    for line in read_text("/proc/meminfo").splitlines():
+        key, _, rest = line.partition(":")
+        parts = rest.split()
+        if parts and parts[0].isdigit():
+            values[key] = int(parts[0]) * 1024
+    total = values.get("MemTotal", 0)
+    available = values.get("MemAvailable", 0)
+    return {
+        "totalBytes": total,
+        "usedBytes": max(0, total - available),
+        "availableBytes": available,
+        "percent": round((total - available) / total * 100) if total else 0,
+    }
+
+
+def cpu_model() -> str:
+    for line in read_text("/proc/cpuinfo").splitlines():
+        if line.lower().startswith("model name"):
+            return line.split(":", 1)[1].strip()
+    return "Unknown CPU"
+
+
+def cpu_mhz() -> float:
+    speeds = [
+        float(line.split(":", 1)[1])
+        for line in read_text("/proc/cpuinfo").splitlines()
+        if line.lower().startswith("cpu mhz") and ":" in line
+    ]
+    return round(sum(speeds) / len(speeds), 1) if speeds else 0.0
+
+
+def temperature() -> float | None:
+    for zone in sorted(Path("/sys/class/thermal").glob("thermal_zone*")):
+        raw = read_text(str(zone / "temp"))
+        if raw.lstrip("-").isdigit():
+            value = int(raw) / 1000
+            if -40 < value < 150:
+                return round(value, 1)
+    return None
+
+
+def uptime_seconds() -> float:
+    try:
+        return float(read_text("/proc/uptime").split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0.0
+
+
+def version_facts() -> dict:
+    try:
+        payload = json.loads(VERSION_FILE.read_text())
+        return {
+            "version": str(payload.get("version", "dev")),
+            "build": str(payload.get("build", "dev")),
+            "builtAt": payload.get("builtAt"),
+        }
+    except (OSError, ValueError):
+        return {"version": "dev", "build": "dev", "builtAt": None}
+
+
+def container_runtime() -> str:
+    try:
+        detected = subprocess.run(
+            ["systemd-detect-virt", "--container"], capture_output=True, text=True, timeout=3
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        detected = ""
+    if not detected or detected == "none":
+        return "Bare metal"
+    return {"lxc": "Incus / LXC", "docker": "Docker", "podman": "Podman"}.get(
+        detected, detected.capitalize()
+    )
+
+
+def storage_facts() -> dict:
+    pools = []
+    seen = set()
+    for name, mount in (("System", "/"), ("Files", str(ROOT))):
+        try:
+            usage = shutil.disk_usage(mount)
+        except OSError:
+            continue
+        source = ""
+        for line in read_text("/proc/self/mountinfo").splitlines():
+            fields = line.split()
+            if len(fields) > 4 and fields[4] == mount:
+                separator = fields.index("-") if "-" in fields else -1
+                if separator > 0 and len(fields) > separator + 2:
+                    source = fields[separator + 2]
+                break
+        if mount in seen:
+            continue
+        seen.add(mount)
+        pools.append(
+            {
+                "id": f"pool-{len(pools)}",
+                "name": name,
+                "mount": mount,
+                "source": source,
+                "usedBytes": usage.used,
+                "totalBytes": usage.total,
+                "freeBytes": usage.free,
+                "health": "Healthy" if usage.total and usage.used / usage.total < 0.9 else "Warning",
+                "kind": "zfs" if source.startswith("tank/") else "filesystem",
+            }
+        )
+
+    disks = []
+    for block in sorted(Path("/sys/block").glob("*")):
+        name = block.name
+        if name.startswith(("loop", "ram", "dm-", "md", "sr")):
+            continue
+        try:
+            sectors = int(read_text(str(block / "size")) or 0)
+        except ValueError:
+            continue
+        if sectors <= 0:
+            continue
+        model = read_text(str(block / "device/model")) or name
+        rotational = read_text(str(block / "queue/rotational")) == "1"
+        disks.append(
+            {
+                "id": name,
+                "name": name,
+                "model": model.strip(),
+                "capacityBytes": sectors * 512,
+                "kind": "HDD" if rotational else "SSD",
+                "temperature": None,
+                "health": "Healthy",
+                "note": "host device, not managed inside this container",
+            }
+        )
+
+    nodes = scan_files()
+    return {
+        "pools": pools,
+        "disks": disks,
+        "files": {
+            "count": sum(1 for node in nodes if node["type"] == "file"),
+            "folders": sum(1 for node in nodes if node["type"] == "folder"),
+            "bytes": sum(node["size"] or 0 for node in nodes),
+        },
+    }
+
+
+def users_facts(identity: dict | None) -> list[dict]:
+    palette = ["#0a63ff", "#8b5cf6", "#10b981", "#f59e0b", "#f43f5e", "#06b6d4"]
+    users = []
+    for line in read_text("/etc/passwd").splitlines():
+        fields = line.split(":")
+        if len(fields) < 7:
+            continue
+        name, _, uid, gid, gecos, home, shell = fields[:7]
+        try:
+            uid_value = int(uid)
+        except ValueError:
+            continue
+        if uid_value != 0 and uid_value < 1000:
+            continue
+        if shell.endswith(("nologin", "false")):
+            continue
+        display = gecos.split(",")[0] or name
+        users.append(
+            {
+                "id": f"u-{uid_value}",
+                "name": display,
+                "email": f"{name}@{socket.gethostname()}",
+                "role": "Owner" if uid_value == 0 else "Member",
+                "lastActive": "Never",
+                "color": palette[uid_value % len(palette)],
+                "isCurrent": False,
+                "account": name,
+                "home": home,
+            }
+        )
+    if identity and identity.get("email"):
+        users.insert(
+            0,
+            {
+                "id": "sso",
+                "name": identity.get("name") or identity["email"].split("@")[0],
+                "email": identity["email"],
+                "role": "Admin",
+                "lastActive": "This session",
+                "color": "#0a63ff",
+                "isCurrent": True,
+                "account": identity.get("username") or "",
+                "home": "",
+            },
+        )
+    return users
+
+
+def services_facts() -> list[dict]:
+    try:
+        completed = subprocess.run(
+            [
+                "systemctl",
+                "list-units",
+                "--type=service",
+                "--all",
+                "--no-legend",
+                "--plain",
+                "--no-pager",
+                "--output=json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        units = json.loads(completed.stdout or "[]")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        units = []
+    services = []
+    for unit in units:
+        name = str(unit.get("unit", ""))
+        if not name.endswith(".service") or unit.get("load") != "loaded":
+            continue
+        services.append(
+            {
+                "id": name,
+                "name": name.removesuffix(".service"),
+                "description": str(unit.get("description", "")),
+                "load": str(unit.get("load", "")),
+                "active": str(unit.get("active", "")),
+                "sub": str(unit.get("sub", "")),
+                "running": unit.get("active") == "active",
+            }
+        )
+    return services
+
+
+def notifications_facts(storage: dict, services: list[dict]) -> list[dict]:
+    items = []
+    for pool in storage["pools"]:
+        total = pool["totalBytes"]
+        if total and pool["usedBytes"] / total >= 0.9:
+            percent = round(pool["usedBytes"] / total * 100)
+            items.append(
+                {
+                    "id": f"n-{pool['id']}",
+                    "title": f"{pool['name']} is {percent}% full",
+                    "body": "Free space before the volume is exhausted.",
+                    "tone": "warning",
+                    "time": "now",
+                    "read": False,
+                    "action": {"label": "Review storage", "route": "storage"},
+                }
+            )
+    for service in services:
+        if service["name"] in ("nginx", "orion-api") and not service["running"]:
+            items.append(
+                {
+                    "id": f"n-{service['id']}",
+                    "title": f"{service['name']} is not running",
+                    "body": "The desktop is served by this unit.",
+                    "tone": "danger",
+                    "time": "now",
+                    "read": False,
+                    "action": {"label": "Review services", "route": "apps"},
+                }
+            )
+    try:
+        trashed = sum(1 for _ in TRASH.iterdir())
+    except OSError:
+        trashed = 0
+    if trashed:
+        items.append(
+            {
+                "id": "n-trash",
+                "title": f"{trashed} item{'s' if trashed != 1 else ''} in Trash",
+                "body": "Deleted files stay on disk until the trash is emptied.",
+                "tone": "info",
+                "time": "now",
+                "read": True,
+                "action": {"label": "Open Files", "route": "files"},
+            }
+        )
+    return items
+
+
+# ------------------------------------------------------------- telemetry
+
+
+class Sampler:
+    """Two-second sampling, so a fresh page still has a real trend to draw."""
+
+    def __init__(self) -> None:
+        # Empty until sampled: a fresh boot has no history, and inventing one
+        # would be the demo mode this service exists to remove.
+        self.cpu: deque[int] = deque(maxlen=HISTORY)
+        self.ram: deque[int] = deque(maxlen=HISTORY)
+        self.net_down: deque[float] = deque(maxlen=HISTORY)
+        self.net_up: deque[float] = deque(maxlen=HISTORY)
+        self.latest = {"cpu": 0, "ram": 0, "netDown": 0.0, "netUp": 0.0}
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._previous: tuple[int, int, int, int, float] | None = None
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, name="sampler", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.wait(SAMPLE_SECONDS):
+            try:
+                with self._lock:
+                    self._sample()
+            except OSError:
+                continue
+
+    def _sample(self) -> None:
+        try:
+            fields = read_text("/proc/stat").splitlines()[0].split()
+            values = [int(field) for field in fields[1:]]
+            idle = values[3] + (values[4] if len(values) > 4 else 0)
+            total = sum(values)
+            now = time.monotonic()
+            memory = memory_facts()
+            interface = default_interface()
+            counter_rx = counter_tx = 0
+            for line in read_text("/proc/net/dev").splitlines()[2:]:
+                name, _, rest = line.partition(":")
+                if name.strip() != interface:
+                    continue
+                parts = rest.split()
+                counter_rx, counter_tx = int(parts[0]), int(parts[8])
+                break
+        except (OSError, ValueError, IndexError):
+            return
+
+        previous = self._previous
+        self._previous = (idle, total, counter_rx, counter_tx, now)
+        if previous is None:
+            # Rates need two counter readings; the first pass only records them.
+            return
+
+        previous_idle, previous_total, previous_rx, previous_tx, previous_at = previous
+        delta_total = max(1, total - previous_total)
+        cpu = round(max(0, min(100, 100 * (1 - (idle - previous_idle) / delta_total))))
+        elapsed = max(0.5, now - previous_at)
+        down = max(0.0, (counter_rx - previous_rx) / elapsed)
+        up = max(0.0, (counter_tx - previous_tx) / elapsed)
+        self.latest = {"cpu": cpu, "ram": memory["percent"], "netDown": down, "netUp": up}
+        self.cpu.append(cpu)
+        self.ram.append(memory["percent"])
+        self.net_down.append(round(down, 1))
+        self.net_up.append(round(up, 1))
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            latest = self.latest
+            return {
+                "cpu": latest["cpu"],
+                "ram": latest["ram"],
+                "temp": temperature(),
+                "cpuMhz": cpu_mhz(),
+                "uptimeSeconds": uptime_seconds(),
+                "netDown": latest["netDown"],
+                "netUp": latest["netUp"],
+                "cpuHistory": list(self.cpu),
+                "ramHistory": list(self.ram),
+                "netDownHistory": list(self.net_down),
+                "netUpHistory": list(self.net_up),
+            }
+
+
+SAMPLER = Sampler()
+
+
+# ----------------------------------------------------------------- server
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "orion-api"
+    sys_version = ""
+
+    def log_message(self, fmt: str, *args) -> None:  # quieter journal
+        print(f"{self.address_string()} {fmt % args}", flush=True)
+
+    # -- helpers
+
+    def json(self, payload, status: int = 200) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def fail(self, message: str, status: int = 400) -> None:
+        self.json({"error": message}, status)
+
+    def identity(self) -> dict | None:
+        email = (
+            self.headers.get("X-Auth-Request-Email")
+            or self.headers.get("X-Authentik-Email")
+            or ""
+        ).strip()
+        if not email:
+            return None
+        return {
+            "email": email,
+            "name": self.headers.get("X-Auth-Request-Preferred-Username") or "",
+            "username": self.headers.get("X-Auth-Request-User") or "",
+            "groups": [
+                value.strip()
+                for value in (self.headers.get("X-Auth-Request-Groups") or "").split(",")
+                if value.strip()
+            ],
+        }
+
+    def query(self) -> dict:
+        return dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query))
+
+    def body(self) -> dict:
+        length = int(self.headers.get("Content-Length") or 0)
+        if not length:
+            return {}
+        try:
+            payload = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            raise ValueError("body must be JSON")
+        if not isinstance(payload, dict):
+            raise ValueError("body must be an object")
+        return payload
+
+    # -- routes
+
+    def do_GET(self) -> None:
+        parsed = urllib.parse.urlsplit(self.path)
+        route = parsed.path.rstrip("/") or "/"
+        try:
+            if route == "/api/metrics":
+                self.json(SAMPLER.snapshot())
+                return
+            if route == "/api/system":
+                identity = self.identity()
+                self.json(
+                    {
+                        "hostname": socket.gethostname(),
+                        "kernel": os.uname().release,
+                        "arch": os.uname().machine,
+                        "cpu": {"model": cpu_model(), "cores": os.cpu_count() or 1},
+                        "memory": memory_facts(),
+                        "uptimeSeconds": uptime_seconds(),
+                        "runtime": container_runtime(),
+                        "network": network_facts(),
+                        "storageRoot": str(ROOT),
+                        "version": version_facts(),
+                        "identity": identity,
+                        "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    }
+                )
+                return
+            if route == "/api/state":
+                storage = storage_facts()
+                services = services_facts()
+                nodes = scan_files()
+                self.json(
+                    {
+                        "files": nodes,
+                        "storage": storage,
+                        "users": users_facts(self.identity()),
+                        "services": services,
+                        "notifications": notifications_facts(storage, services),
+                        "roots": [
+                            {"label": node["name"], "path": node["id"]}
+                            for node in sorted(nodes, key=lambda item: item["name"].lower())
+                            if node["parent"] == "/" and node["type"] == "folder"
+                        ],
+                    }
+                )
+                return
+            if route == "/api/files/content":
+                self.download()
+                return
+            self.fail("not found", HTTPStatus.NOT_FOUND)
+        except ValueError as error:
+            self.fail(str(error))
+        except OSError as error:
+            self.fail(f"{error.strerror or error}", HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def download(self) -> None:
+        target = safe_path(self.query().get("path", ""))
+        if not target.is_file():
+            self.fail("no such file", HTTPStatus.NOT_FOUND)
+            return
+        size = target.stat().st_size
+        inline = self.query().get("inline") == "1"
+        disposition = "inline" if inline else "attachment"
+        self.send_response(HTTPStatus.OK)
+        self.send_header(
+            "Content-Type", "application/octet-stream" if not inline else guess_type(target.name)
+        )
+        self.send_header("Content-Length", str(size))
+        self.send_header(
+            "Content-Disposition",
+            f'{disposition}; filename="{urllib.parse.quote(target.name)}"',
+        )
+        self.send_header("Cache-Control", "private, max-age=300")
+        self.end_headers()
+        with open(target, "rb") as handle:
+            shutil.copyfileobj(handle, self.wfile, 262_144)
+
+    def do_POST(self) -> None:
+        route = urllib.parse.urlsplit(self.path).path.rstrip("/") or "/"
+        try:
+            if route == "/api/files/mkdir":
+                payload = self.body()
+                parent = safe_path(str(payload.get("parent", "/")))
+                name = clean_name(str(payload.get("name", "")))
+                if not parent.is_dir():
+                    self.fail("no such folder")
+                    return
+                (parent / name).mkdir()
+                self.json({"ok": True, "path": virtual_path(parent / name)})
+                return
+            if route == "/api/files/rename":
+                payload = self.body()
+                target = safe_path(str(payload.get("path", "")))
+                name = clean_name(str(payload.get("name", "")))
+                if not target.exists():
+                    self.fail("no such item", HTTPStatus.NOT_FOUND)
+                    return
+                if target == ROOT:
+                    self.fail("cannot rename the storage root")
+                    return
+                destination = target.parent / name
+                if destination.exists() and destination != target:
+                    self.fail("an item with that name already exists", HTTPStatus.CONFLICT)
+                    return
+                target.rename(destination)
+                self.json({"ok": True, "path": virtual_path(destination)})
+                return
+            if route == "/api/files/delete":
+                payload = self.body()
+                paths = payload.get("paths")
+                if not isinstance(paths, list) or not paths:
+                    self.fail("nothing selected")
+                    return
+                moved = move_to_trash([str(item) for item in paths])
+                self.json({"ok": True, "moved": moved})
+                return
+            if route == "/api/files/star":
+                payload = self.body()
+                path = str(payload.get("path", ""))
+                safe_path(path)
+                stars = load_stars()
+                if payload.get("starred"):
+                    stars.add(path)
+                else:
+                    stars.discard(path)
+                save_stars(stars)
+                self.json({"ok": True, "starred": path in stars})
+                return
+            if route == "/api/services":
+                payload = self.body()
+                unit = str(payload.get("unit", ""))
+                action = str(payload.get("action", ""))
+                if not UNIT_PATTERN.match(unit):
+                    self.fail("invalid unit")
+                    return
+                if action not in ("start", "stop", "restart"):
+                    self.fail("invalid action")
+                    return
+                # Stopping either of these cuts the browser's own way back in.
+                if action == "stop" and unit in ("nginx.service", "orion-api.service"):
+                    self.fail(
+                        f"{unit} serves this desktop; stop it over incus instead",
+                        HTTPStatus.CONFLICT,
+                    )
+                    return
+                completed = subprocess.run(
+                    ["systemctl", action, unit], capture_output=True, text=True, timeout=30
+                )
+                if completed.returncode != 0:
+                    self.fail(completed.stderr.strip() or "systemctl failed", HTTPStatus.BAD_GATEWAY)
+                    return
+                self.json({"ok": True, "unit": unit, "action": action})
+                return
+            if route == "/api/files/content":
+                self.upload()
+                return
+            self.fail("not found", HTTPStatus.NOT_FOUND)
+        except ValueError as error:
+            self.fail(str(error))
+        except FileExistsError:
+            self.fail("that item already exists", HTTPStatus.CONFLICT)
+        except OSError as error:
+            self.fail(f"{error.strerror or error}", HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def upload(self) -> None:
+        query = self.query()
+        directory = safe_path(query.get("path", "/"))
+        if not directory.is_dir():
+            self.fail("no such folder")
+            return
+        length_header = self.headers.get("Content-Length")
+        length = int(length_header) if length_header else None
+        chunked = "chunked" in (self.headers.get("Transfer-Encoding") or "").lower()
+        node = upload_stream(
+            directory, query.get("name", ""), self.rfile, length, chunked
+        )
+        self.json({"ok": True, "file": node})
+
+
+def guess_type(name: str) -> str:
+    import mimetypes
+
+    return mimetypes.guess_type(name)[0] or "application/octet-stream"
+
+
+def main() -> None:
+    META.mkdir(parents=True, exist_ok=True)
+    TRASH.mkdir(parents=True, exist_ok=True)
+    SAMPLER.start()
+    server = ThreadingHTTPServer((BIND, PORT), Handler)
+    print(f"orion-api listening on {BIND}:{PORT}, root {ROOT}", flush=True)
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

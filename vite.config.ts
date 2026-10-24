@@ -12,13 +12,9 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: false,
-    // `npm run dev` talks to `node server/index.mjs` on the port it listens on,
-    // so the dev build is live against the same host API as the container.
+    // The desktop has no data of its own; dev talks to a running orion-api.
     proxy: {
-      '/api': {
-        target: process.env.ORION_API ?? 'http://127.0.0.1:8080',
-        changeOrigin: true,
-      },
+      '/api': { target: process.env.ORION_API ?? 'http://127.0.0.1:8099' },
     },
   },
 })
