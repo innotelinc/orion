@@ -668,6 +668,9 @@ class ShareClientTestCase(unittest.TestCase):
         facts = self.api.space_facts(self.api.load_spaces()[0], 0, self.admin)
         self.assertEqual(facts["clients"], [])
         self.assertEqual(facts["lastClient"]["machine"], "Studio PC")
+        # The remembered machine carries the label too, or a closed session
+        # would offer to name a machine that already has a name.
+        self.assertEqual(facts["lastClient"]["label"], "Studio PC")
         stored = json.loads((self.root / ".orion" / "share-clients.json").read_text())
         self.assertEqual(stored["labels"]["192.168.1.20"], "Studio PC")
 

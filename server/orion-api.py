@@ -1757,6 +1757,7 @@ def share_client_map(spaces: list[dict], ttl: float = 5.0) -> dict[str, dict]:
         record = {
             "machine": latest["machine"],
             "address": latest["address"],
+            "label": latest["label"],
             "since": latest["since"],
         }
         if remembered.get(slug) != record:
@@ -1833,6 +1834,7 @@ def set_share_client_label(address: str, name: str, session: dict) -> dict:
     for record in registry["shares"].values():
         if str(record.get("address") or "") == address:
             record["machine"] = label or machine_name(address, labels) or address
+            record["label"] = label
     save_share_registry(registry)
     # The resolved name for this address may now be superseded, and the per-space
     # map was built from the old registry; neither may serve the next read.
