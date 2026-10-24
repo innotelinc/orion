@@ -26,9 +26,10 @@ import {
 } from 'lucide-react'
 import { BUILTIN_APPS } from '../data/apps'
 import { useApp } from '../context/AppContext'
-import { formatBytes, formatClock, formatDay, formatPercent, greeting, relativeTime } from '../lib/format'
+import { classNames, formatBytes, formatClock, formatDay, formatPercent, greeting, relativeTime } from '../lib/format'
+import { shareState } from '../lib/shares'
 import type { NavigateOptions, RouteName } from '../hooks/useRoute'
-import type { FileTone, NotificationTone } from '../types'
+import type { FileTone, NotificationTone, Space } from '../types'
 import { AppIcon } from '../components/ui/AppIcon'
 import { ProgressBar } from '../components/ui/ProgressBar'
 import { Sparkline } from '../components/ui/Sparkline'
@@ -275,6 +276,66 @@ function NetworkCard() {
   )
 }
 
+function SharesCard({
+  onOpen,
+  onManage,
+}: {
+  onOpen: (space: Space) => void
+  onManage: () => void
+}) {
+  const { spaces } = useApp()
+  const live = spaces.filter((space) => (space.clients ?? []).length > 0).length
+  return (
+    <section className="shares-card card" aria-labelledby="shares-title">
+      <header className="widget-head">
+        <h2 id="shares-title">Shares</h2>
+        <span className={classNames('iface-chip', live > 0 && 'iface-chip--live')}>
+          {live > 0 ? <span className="live-dot" aria-hidden="true" /> : null}
+          {live > 0 ? `${live} connected` : 'nothing mounted'}
+        </span>
+      </header>
+      <ul className="shares-list">
+        {spaces.slice(0, 4).map((space) => {
+          const state = shareState(space)
+          return (
+            <li key={space.id}>
+              <button
+                type="button"
+                className="share-row"
+                title={
+                  state.live
+                    ? `${space.name} — ${state.machine} connected`
+                    : space.lastClient
+                      ? `${space.name} — last from ${state.machine || 'a client'} ${state.label}`
+                      : `${space.name} — no machine has opened this share yet`
+                }
+                onClick={() => onOpen(space)}
+              >
+                <span
+                  className={classNames('share-dot', state.live && 'share-dot--live')}
+                  aria-hidden="true"
+                />
+                <span className="share-row__copy">
+                  <strong>{space.name}</strong>
+                  <span>{state.machine || `\\ORION-NAS\\${space.slug}`}</span>
+                </span>
+                <span className={classNames('share-row__state', state.live && 'is-live')}>
+                  {state.label}
+                </span>
+              </button>
+            </li>
+          )
+        })}
+        {spaces.length === 0 ? <li className="dim">No spaces yet.</li> : null}
+      </ul>
+      <button type="button" className="text-button" onClick={onManage}>
+        {spaces.length > 4 ? `All ${spaces.length} shares` : 'Manage shares'}
+        <ChevronRight size={12} aria-hidden="true" />
+      </button>
+    </section>
+  )
+}
+
 interface Tile {
   id: string
   name: string
@@ -383,6 +444,10 @@ export function Dashboard({ navigate, onOpenPalette }: DashboardProps) {
         <SystemCard onDetails={() => navigate('settings', { tab: 'about' })} />
         <StorageCard onOpen={() => navigate('storage')} />
         <NetworkCard />
+        <SharesCard
+          onOpen={(space) => navigate('files', { path: space.path })}
+          onManage={() => navigate('settings', { tab: 'users' })}
+        />
         <button
           type="button"
           className="widget-settings card"

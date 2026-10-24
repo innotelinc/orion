@@ -88,6 +88,10 @@
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
+.files-sidebar__item small.is-live {
+  color: var(--success);
+  font-weight: 600;
+}
 
 .files-sidebar__storage {
   margin-top: auto;

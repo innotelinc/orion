@@ -117,7 +117,14 @@ setting a password again brings the share back. The same dialog lists the two
 addresses a client can use — `\\ORION-NAS\<slug>` and
 `smb://orion-nas.local/<slug>` — and the username, each with a copy button.
 
-Below those paths the dialog says whether a client has actually connected:
+The same state is on the Files sidebar and the dashboard's **Shares** card, so a
+mount is visible without opening Settings: a green dot and *live* means Samba
+reports a machine on the share right now, a grey dot with a time means it was
+used and when, and *Never* means no client has ever opened it. The page reads
+`/api/state` every 20 seconds, so a mount appears within that.
+
+In the share dialog itself, below the paths, the same fact is spelled out in
+full:
 `smbstatus --json` names the machine on every open session, and because that
 only reports the present, the API also remembers the last machine it saw for
 each share in `.orion/share-clients.json`. So the three states read differently —

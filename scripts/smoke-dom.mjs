@@ -137,6 +137,12 @@ async function at(hash) {
 
 const filesText = await at('#/files')
 const fileRows = window.document.querySelectorAll('.file-table tbody tr').length
+// The sidebar is where a mounted share should be visible without opening
+// Settings; the fixture's space has a live session on DESKTOP-7Q4.
+const filesShares = {
+  rows: window.document.querySelectorAll('.files-sidebar .share-dot').length,
+  live: window.document.querySelectorAll('.files-sidebar .share-dot--live').length,
+}
 const appsText = await at('#/apps')
 const unitCards = window.document.querySelectorAll('.store-card').length
 const storageText = await at('#/storage')
@@ -176,6 +182,12 @@ await at('#/')
 // also proves the control is not conditional on one being present.
 const signOutButton = window.document.querySelector('.titlebar button[aria-label^="Sign out"]')
 const version = JSON.parse(fixtures['/api/system']).version.version
+const dashboardShares = {
+  card: Boolean(window.document.querySelector('.shares-card')),
+  rows: window.document.querySelectorAll('.shares-card .share-row').length,
+  live: window.document.querySelectorAll('.shares-card .share-dot--live').length,
+  namesTheClient: window.document.body.textContent.includes('DESKTOP-7Q4'),
+}
 
 const text = window.document.body.textContent.replace(/\s+/g, ' ')
 const summary = {
@@ -203,6 +215,8 @@ const summary = {
     aboutShowsBuild: aboutText.includes(version),
     settingsTabs,
     shareDialog,
+    filesShares,
+    dashboardShares,
   },
   headings: [...window.document.querySelectorAll('h1, h2')].map((node) => node.textContent.trim()).slice(0, 8),
   errors: errors.slice(0, 3),
@@ -225,5 +239,9 @@ const broken =
   // A Settings tab that crashed, or one that rendered nothing worth reading.
   Object.values(summary.routes.settingsTabs).some((tab) => tab.crashed || tab.chars < 200) ||
   !summary.routes.shareDialog.namesTheClient ||
-  !summary.routes.shareDialog.claimsConnected
+  !summary.routes.shareDialog.claimsConnected ||
+  summary.routes.filesShares.live === 0 ||
+  !summary.routes.dashboardShares.card ||
+  !summary.routes.dashboardShares.namesTheClient ||
+  summary.routes.dashboardShares.live === 0
 process.exit(broken ? 1 : 0)

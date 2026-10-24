@@ -295,6 +295,69 @@
   border-color: var(--border-strong);
   color: var(--text);
 }
+.iface-chip--live {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 30%, transparent);
+  background: var(--success-soft);
+}
+
+/*
+ * A share is only reachable when something is mounted on it, so this card says
+ * which shares have a machine on them right now and which were used and when.
+ */
+.shares-card {
+  padding: 16px 18px 12px;
+}
+.shares-list {
+  margin: 8px 0 4px;
+}
+.share-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 5px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  transition: background var(--transition);
+}
+.share-row:hover {
+  background: var(--surface-3);
+}
+.share-row__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  flex: 1;
+  min-width: 0;
+}
+.share-row__copy strong {
+  font-size: 11.5px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-row__copy span {
+  font-size: 9.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-row__state {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  color: var(--text-dim);
+}
+.share-row__state.is-live {
+  color: var(--success);
+  font-weight: 600;
+}
 .network-card__chart {
   position: relative;
   height: 78px;

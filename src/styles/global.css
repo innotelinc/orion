@@ -1994,6 +1994,20 @@ dialog.palette-dialog[open] {
 .tabular {
   font-variant-numeric: tabular-nums;
 }
+/* A share's connection light: grey until Samba reports a machine on it. */
+.share-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  opacity: 0.55;
+}
+.share-dot--live {
+  background: var(--success);
+  opacity: 1;
+  box-shadow: 0 0 0 3px var(--success-soft);
+}
 
 [data-density='compact'] {
   --radius: 14px;

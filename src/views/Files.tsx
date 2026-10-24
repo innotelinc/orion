@@ -33,6 +33,7 @@ import { joinPath } from '../data/files'
 import { downloadUrl } from '../lib/api'
 import { useApp } from '../context/AppContext'
 import { classNames, formatBytes, formatFullDateTime, formatPercent, relativeTime } from '../lib/format'
+import { shareState } from '../lib/shares'
 import { Avatar } from '../components/ui/Avatar'
 import { EmptyState } from '../components/ui/EmptyState'
 import { Modal } from '../components/ui/Modal'
@@ -90,6 +91,7 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
   const {
     files,
     roots,
+    spaces,
     storage,
     users,
     settings,
@@ -322,6 +324,45 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
               )
             })}
           </nav>
+
+          {spaces.length > 0 ? (
+            <>
+              <p className="files-sidebar__label">Shares</p>
+              <nav className="files-sidebar__nav" aria-label="Network shares">
+                {spaces.map((space) => {
+                  const state = shareState(space)
+                  const active =
+                    currentPath === space.path || currentPath.startsWith(`${space.path}/`)
+                  return (
+                    <button
+                      key={space.id}
+                      type="button"
+                      className={classNames('files-sidebar__item', active && 'is-active')}
+                      // The dot is the answer to "is anything actually on this share",
+                      // so it carries the machine name as its title either way.
+                      title={
+                        state.live
+                          ? `${space.name} — ${state.machine} connected`
+                          : space.lastClient
+                            ? `${space.name} — last from ${state.machine || 'a client'} ${state.label}`
+                            : `${space.name} — no machine has opened this share yet`
+                      }
+                      onClick={() => navigate('files', { path: space.path })}
+                    >
+                      <span
+                        className={classNames('share-dot', state.live && 'share-dot--live')}
+                        aria-hidden="true"
+                      />
+                      <span>{space.name}</span>
+                      <small className={classNames(state.live && 'is-live')}>
+                        {state.live ? 'live' : state.label === 'Never' ? 'idle' : state.label}
+                      </small>
+                    </button>
+                  )
+                })}
+              </nav>
+            </>
+          ) : null}
 
           <div className="files-sidebar__storage">
             <div className="files-sidebar__storage-head">
