@@ -765,13 +765,41 @@ def dpkg_installed(package: str) -> bool:
     return completed.returncode == 0 and "install ok installed" in completed.stdout
 
 
+# A container image has no PID 1 systemd, so the same code has to answer for a
+# daemon started by the entrypoint. Everything else works unchanged.
+HAVE_SYSTEMD = Path("/run/systemd/system").is_dir()
+UNIT_PROCESS = {
+    "smbd.service": "smbd",
+    "nmbd.service": "nmbd",
+    "avahi-daemon.service": "avahi-daemon",
+    "nginx.service": "nginx",
+    "orion-api.service": "python3",
+    "nfs-server.service": "rpc.nfsd",
+}
+
+
+def process_state(unit: str) -> tuple[bool, str]:
+    process = UNIT_PROCESS.get(unit)
+    if process is None:
+        return False, "not managed here"
+    try:
+        completed = subprocess.run(
+            ["pgrep", "-x", process[:15]], capture_output=True, text=True, timeout=4
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False, "unknown"
+    return completed.returncode == 0, "active" if completed.returncode == 0 else "inactive"
+
+
 def unit_state(unit: str) -> tuple[bool, str]:
+    if not HAVE_SYSTEMD:
+        return process_state(unit)
     try:
         completed = subprocess.run(
             ["systemctl", "is-active", unit], capture_output=True, text=True, timeout=6
         )
     except (OSError, subprocess.SubprocessError):
-        return False, "unknown"
+        return process_state(unit)
     state = completed.stdout.strip() or "unknown"
     return completed.returncode == 0 and state == "active", state
 
@@ -816,8 +844,24 @@ def run_root(script: str, stdin_text: str | None = None, timeout: int = APT_TIME
     work happens in a transient unit: the daemon's privileges, none of its
     sandbox, and a unit name a human can see in the journal afterwards.
     """
-    if shutil.which("systemd-run") is None:
-        raise RuntimeError("systemd-run is not installed, so this host cannot make that change")
+    if not HAVE_SYSTEMD or shutil.which("systemd-run") is None:
+        # No systemd: this process is already the container's root, so the
+        # script runs directly. Nothing outside the container is reachable.
+        completed = subprocess.run(
+            ["/bin/sh", "-c", script],
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if completed.returncode != 0:
+            lines = [
+                line.strip()
+                for line in (completed.stderr or completed.stdout).splitlines()
+                if line.strip()
+            ]
+            raise RuntimeError(lines[-1] if lines else f"the host refused the change ({completed.returncode})")
+        return completed.stdout
     unit = f"orion-provision-{os.getpid()}-{int(time.time() * 1000) % 100_000}"
     completed = subprocess.run(
         [
@@ -1023,7 +1067,7 @@ def apply_discovery() -> None:
         f"mkdir -p {AVAHI_SERVICE.parent}\n"
         f"cat > {AVAHI_SERVICE}\n"
         "systemctl enable avahi-daemon.service >/dev/null 2>&1 || true\n"
-        "systemctl restart avahi-daemon.service\n",
+        "systemctl restart avahi-daemon.service >/dev/null 2>&1 || avahi-daemon --reload >/dev/null 2>&1 || true\n",
         stdin_text=service,
         timeout=120,
     )

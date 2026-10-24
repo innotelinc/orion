@@ -1,0 +1,23 @@
+# Orion on a Linux server: one container, its data on the host.
+#
+#   docker compose up -d --build        # or ./install.sh
+#
+# network_mode: host is deliberate. mDNS answers on 5353 and Samba on 445/139,
+# and both are advertised to the LAN — behind a NAT bridge the desktop works but
+# nothing discovers the box. The trade is that ORION_HTTP_PORT (8080 by default)
+# has to be free on the host; set it in .env if something already listens there.
+services:
+  orion:
+    build: .
+    image: innotel/orion:latest
+    container_name: orion
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      ORION_ROOT: /srv/storage
+      ORION_HTTP_PORT: "${ORION_HTTP_PORT:-8080}"
+      ORION_NAME: "${ORION_NAME:-orion-nas}"
+    volumes:
+      # Everything the desktop shows lives here, and it is the only thing that
+      # survives `docker compose down`.
+      - "${ORION_DATA:-/srv/orion}:/srv/storage"

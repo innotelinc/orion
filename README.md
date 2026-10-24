@@ -102,6 +102,30 @@ so a rebuilt container gets them back by installing the app again.
 
 ## Deployment
 
+Two shapes are supported: a Docker container on a plain Linux server, and the
+Incus container that serves https://nas.innotel.us today.
+
+### Docker on a Linux server
+
+```bash
+./install.sh                                  # /srv/orion on :8080
+ORION_DATA=/mnt/tank/orion ORION_HTTP_PORT=9000 ./install.sh
+```
+
+The image is built from `Dockerfile` (the desktop compiled in a Node stage, then
+nginx, the API, Samba and avahi on Ubuntu). `docker/entrypoint.sh` starts those
+daemons because the container has no systemd, and the API runs its privileged
+steps directly when `/run/systemd/system` is absent — the same code paths serve
+both shapes. `docker-compose.yml` uses `network_mode: host` so mDNS has a real
+LAN and SMB is reachable; only the HTTP port needs to be free.
+
+Sign-in is not in the container: put your own proxy in front of it and forward
+`X-Auth-Request-Email`. `deploy/sso/` is the oauth2-proxy configuration this
+project runs, including the `--prompt=login` that stops a surviving provider
+session from signing a signed-out browser straight back in.
+
+### Incus (the live instance)
+
 The live copy is the `nas` Incus container (192.168.1.89) at
 https://nas.innotel.us.
 
