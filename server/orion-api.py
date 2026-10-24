@@ -1353,7 +1353,7 @@ function fmt(bytes) {
 render(data);
 setInterval(async () => {
   try {
-    const response = await fetch('/api/health', { cache: 'no-store' });
+    const response = await fetch('/health?format=json', { cache: 'no-store' });
     render(await response.json());
   } catch (error) {
     el('status').className = 'pill bad';
@@ -1652,10 +1652,14 @@ class Handler(BaseHTTPRequestHandler):
             if route in ("/health", "/api/health"):
                 facts = health_facts()
                 status = HTTPStatus.OK if facts["ok"] else HTTPStatus.SERVICE_UNAVAILABLE
-                if route == "/health":
-                    self.page(render_health_page(facts), status)
-                else:
+                # /health is the one path the edge proxy leaves open, so the
+                # page has to be able to refresh itself through it: ?format=json
+                # is the same data the page was drawn from.
+                wants_json = route == "/api/health" or self.query().get("format") == "json"
+                if wants_json:
                     self.json(facts, status)
+                else:
+                    self.page(render_health_page(facts), status)
                 return
             if route == "/api/metrics":
                 self.json(SAMPLER.snapshot())
