@@ -78,6 +78,13 @@ export interface Session {
   }
 }
 
+/** One machine Samba has seen on a share, and when it connected. */
+export interface ShareClient {
+  machine: string
+  /** ISO timestamp; empty string when Samba did not say. */
+  since: string
+}
+
 /**
  * A person's own folder on the storage volume. There is no session attached:
  * adding one creates the directory, removing one moves it to Trash.
@@ -101,6 +108,10 @@ export interface Space {
   agency?: string
   /** Whether the session may remove or re-key this person. */
   manageable?: boolean
+  /** Machines connected to this share right now, from smbstatus. */
+  clients?: ShareClient[]
+  /** The last machine to connect, remembered across restarts. */
+  lastClient?: ShareClient | null
 }
 
 /** Something the host can install. `installed` and `state` come from dpkg and systemd. */

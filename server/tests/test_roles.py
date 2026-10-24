@@ -416,5 +416,106 @@ class RoleTestCase(unittest.TestCase):
         self.assertTrue(self.api.directory_ready())
 
 
+class ShareClientTestCase(unittest.TestCase):
+    """What the share dialog may claim about a connection.
+
+    smbstatus only reports sessions that are open right now, so the API also
+    remembers the last machine it saw. Both halves are pure data here; the
+    daemon is stubbed because a test has no Samba.
+    """
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name) / "storage"
+        self.root.mkdir()
+        self.api = load_api(self.root)
+        self.admin = self.api.session_facts(identity("boss@example.test"))
+        self.space = self.api.create_space(
+            {"name": "Ada Lovelace", "email": "ada@example.test", "role": "Member"}, self.admin
+        )
+        # create_space writes a folder; the share is what these tests are about.
+        spaces = self.api.load_spaces()
+        spaces[0]["smb"] = True
+        self.api.save_spaces(spaces)
+        self.api.samba_installed = lambda: True
+        # create_space already asked for the share facts (with no Samba, so
+        # nothing), and that answer is cached for a few seconds.
+        self.api.CLIENT_CACHE.update({"key": None, "at": 0.0, "value": {}})
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_both_section_names_samba_has_used_are_read(self):
+        modern = self.api.parse_share_sessions(
+            {"tcons": {"1": {"service": "Ada Lovelace", "machine": "DESKTOP-7Q4", "connected_at": "2026-10-24T09:15:00"}}}
+        )
+        legacy = self.api.parse_share_sessions(
+            {"shares": {"4242": {"service": "Ada Lovelace", "remote_machine": "DESKTOP-7Q4"}}}
+        )
+        self.assertEqual(modern[0]["machine"], "DESKTOP-7Q4")
+        self.assertEqual(modern[0]["service"], "Ada Lovelace")
+        self.assertEqual(legacy[0]["machine"], "DESKTOP-7Q4")
+        self.assertEqual(legacy[0]["since"], "")
+
+    def test_an_epoch_connect_time_is_reported_as_a_date(self):
+        rows = self.api.parse_share_sessions(
+            {"tcons": [{"service": "ada", "machine": "desktop", "connected_at": 1792853712}]}
+        )
+        self.assertEqual(rows[0]["since"], "2026-10-24T14:55:12Z")
+
+    def test_the_ipc_connection_is_not_a_share(self):
+        rows = self.api.parse_share_sessions(
+            {"tcons": [{"service": "IPC$", "machine": "desktop"}, {"service": "ada", "machine": "desktop"}]}
+        )
+        self.assertEqual([row["service"] for row in rows], ["ada"])
+
+    def test_a_live_session_is_reported_and_remembered(self):
+        self.api.smb_status = lambda: {
+            "tcons": {
+                "1": {"service": "Ada Lovelace", "machine": "DESKTOP-7Q4", "connected_at": "2026-10-24T09:15:00"}
+            }
+        }
+        facts = self.api.space_facts(self.api.load_spaces()[0], 0, self.admin)
+        self.assertTrue(facts["smb"])
+        self.assertEqual([client["machine"] for client in facts["clients"]], ["DESKTOP-7Q4"])
+        self.assertEqual(facts["lastClient"]["machine"], "DESKTOP-7Q4")
+        # Written down, so a closed session still says who was here.
+        stored = json.loads((self.root / ".orion" / "share-clients.json").read_text())
+        self.assertEqual(stored["shares"][self.space["slug"]]["machine"], "DESKTOP-7Q4")
+
+    def test_a_closed_session_keeps_the_last_machine(self):
+        self.api.smb_status = lambda: {
+            "tcons": {
+                "1": {"service": "Ada Lovelace", "machine": "DESKTOP-7Q4", "connected_at": "2026-10-24T09:15:00"}
+            }
+        }
+        self.api.share_client_map(self.api.load_spaces(), ttl=0)
+        self.api.smb_status = lambda: {}
+        # The map is cached for a few seconds; this is the read after that.
+        self.api.CLIENT_CACHE.update({"key": None, "at": 0.0, "value": {}})
+        facts = self.api.space_facts(self.api.load_spaces()[0], 0, self.admin)
+        self.assertEqual(facts["clients"], [])
+        self.assertEqual(facts["lastClient"]["machine"], "DESKTOP-7Q4")
+
+    def test_a_share_without_a_connection_says_so(self):
+        self.api.smb_status = lambda: {}
+        facts = self.api.space_facts(self.api.load_spaces()[0], 0, self.admin)
+        self.assertEqual(facts["clients"], [])
+        self.assertIsNone(facts["lastClient"])
+
+    def test_a_space_that_is_not_shared_claims_nothing(self):
+        spaces = self.api.load_spaces()
+        spaces[0]["smb"] = False
+        self.api.save_spaces(spaces)
+        self.api.smb_status = lambda: {
+            "tcons": {
+                "1": {"service": "Ada Lovelace", "machine": "DESKTOP-7Q4", "connected_at": "2026-10-24T09:15:00"}
+            }
+        }
+        facts = self.api.space_facts(self.api.load_spaces()[0], 0, self.admin)
+        self.assertEqual(facts["clients"], [])
+        self.assertIsNone(facts["lastClient"])
+
+
 if __name__ == "__main__":
     unittest.main()

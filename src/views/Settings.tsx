@@ -23,7 +23,7 @@ import {
   Users,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import { classNames, formatBytes } from '../lib/format'
+import { classNames, formatBytes, relativeTime } from '../lib/format'
 import { signOut } from '../lib/session'
 import { Avatar } from '../components/ui/Avatar'
 import { Modal } from '../components/ui/Modal'
@@ -1443,6 +1443,37 @@ systemctl reload nginx`}
                 </button>
               </div>
             ))}
+          </div>
+        ) : null}
+        {passwordTarget?.smb ? (
+          // The paths above are what to type; this is whether anybody did. Samba
+          // knows about open sessions only, so the API also remembers the last
+          // machine that connected and the two cases read differently.
+          <div
+            className={classNames(
+              'share-connection',
+              passwordTarget.clients?.length ? 'share-connection--live' : undefined,
+            )}
+          >
+            <span className="share-connection__dot" aria-hidden="true" />
+            <div className="share-connection__body">
+              <strong>
+                {passwordTarget.clients?.length
+                  ? `${passwordTarget.clients
+                      .map((client) => client.machine || 'a client')
+                      .join(', ')} ${passwordTarget.clients.length === 1 ? 'is' : 'are'} connected`
+                  : passwordTarget.lastClient
+                    ? `Last connected ${relativeTime(passwordTarget.lastClient.since)}`
+                    : 'No machine has opened this share yet'}
+              </strong>
+              <span className="share-connection__hint">
+                {passwordTarget.clients?.length
+                  ? 'Samba reports this session now, so the path, the account and the password all work.'
+                  : passwordTarget.lastClient
+                    ? `From ${passwordTarget.lastClient.machine || 'a client'}, which Windows will reconnect with on its own.`
+                    : 'It appears here within a few seconds of a client mounting it — reload this page after trying the path above.'}
+              </span>
+            </div>
           </div>
         ) : null}
         <div className="field">

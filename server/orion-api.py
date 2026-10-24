@@ -54,6 +54,10 @@ SPACE_ROLES = (AGENCY_ROLE, "Member", "Guest")
 # that is what they keep meaning.
 LEGACY_ROLES = {"owner": AGENCY_ROLE, "admin": AGENCY_ROLE}
 PLATFORM_ADMINS = META / "platform-admins.json"
+# The last machine Samba reported on each share. smbstatus only knows about
+# sessions that are open right now, so this is what lets the share dialog say
+# "connected an hour ago" instead of "never connected".
+SHARE_CLIENTS = META / "share-clients.json"
 # A provider group that grants the same thing without editing a file here.
 PLATFORM_GROUP = "orion-platform-admins"
 SPACE_PALETTE = ["#0a63ff", "#8b5cf6", "#10b981", "#f59e0b", "#f43f5e", "#06b6d4"]
@@ -765,8 +769,16 @@ def folder_bytes(directory: Path, budget: int = 20_000) -> int:
     return total
 
 
-def space_facts(space: dict, index: int, session: dict | None = None) -> dict:
+def space_facts(
+    space: dict, index: int, session: dict | None = None, clients: dict | None = None
+) -> dict:
     slug = str(space["slug"])
+    if clients is None:
+        # Callers that answer about one space (create, remove, role change) do
+        # not have the whole list; asking here keeps their answer true.
+        clients = share_client_map([space])
+    seen = clients.get(slug) or {}
+    smb = bool(space.get("smb")) and samba_installed()
     return {
         "id": slug,
         "slug": slug,
@@ -780,7 +792,11 @@ def space_facts(space: dict, index: int, session: dict | None = None) -> dict:
         "usedBytes": folder_bytes(users_root() / slug),
         "createdAt": str(space.get("createdAt") or ""),
         "color": str(space.get("color") or SPACE_PALETTE[index % len(SPACE_PALETTE)]),
-        "smb": bool(space.get("smb")) and samba_installed(),
+        "smb": smb,
+        # Who is on the share right now, and who was last: what the dialog needs
+        # to say something better than "try this path".
+        "clients": list(seen.get("clients") or []) if smb else [],
+        "lastClient": (seen.get("lastClient") or None) if smb else None,
     }
 
 
@@ -793,7 +809,10 @@ def spaces_facts(session: dict | None = None) -> list[dict]:
             save_spaces(present)
         except OSError:
             pass
-    return [space_facts(space, index, session) for index, space in enumerate(present)]
+    # Asked once per request rather than once per space: it shells out to
+    # smbstatus, and every space has the same answer to give about itself.
+    clients = share_client_map(present)
+    return [space_facts(space, index, session, clients) for index, space in enumerate(present)]
 
 
 def create_space(
@@ -1545,6 +1564,128 @@ def apply_smb_conf() -> None:
         stdin_text=content,
         timeout=120,
     )
+
+
+def smb_status() -> dict:
+    """Samba's own view of who is connected, as JSON. {} when it cannot say.
+
+    `smbstatus` only reports other people's sessions to root, and orion-api runs
+    as root, so every session is visible. A host without Samba — or with the
+    daemon stopped — answers nothing, which is a fact rather than an error.
+    """
+    if not samba_installed():
+        return {}
+    try:
+        completed = subprocess.run(
+            ["smbstatus", "--json"], capture_output=True, text=True, timeout=8
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    try:
+        payload = json.loads(completed.stdout or "{}")
+    except ValueError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def parse_share_sessions(payload: dict) -> list[dict]:
+    """One row per open tree connection: share, machine, and since when.
+
+    Samba calls this section `shares` before 4.17 and `tcons` from 4.17, and has
+    used both `machine` and `remote_machine` for the client. A build that renames
+    a field again yields no rows rather than a made-up one.
+    """
+    rows = payload.get("tcons")
+    if not isinstance(rows, (dict, list)):
+        rows = payload.get("shares")
+    if isinstance(rows, dict):
+        rows = list(rows.values())
+    found = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        service = str(row.get("service") or row.get("share") or "").strip()
+        if not service or service.lower() == "ipc$":
+            continue
+        machine = str(
+            row.get("machine") or row.get("remote_machine") or row.get("hostname") or ""
+        ).strip()
+        since = str(row.get("connected_at") or row.get("connectedAt") or "").strip()
+        if since.isdigit():
+            # Some builds report the connect time as epoch seconds.
+            since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(since)))
+        found.append({"service": service, "machine": machine, "since": since})
+    return found
+
+
+def load_share_clients() -> dict[str, dict]:
+    try:
+        payload = json.loads(SHARE_CLIENTS.read_text())
+    except (OSError, ValueError):
+        return {}
+    items = payload.get("shares") if isinstance(payload, dict) else None
+    if not isinstance(items, dict):
+        return {}
+    return {str(key): value for key, value in items.items() if isinstance(value, dict)}
+
+
+def save_share_clients(entries: dict[str, dict]) -> None:
+    META.mkdir(parents=True, exist_ok=True)
+    temporary = SHARE_CLIENTS.with_name(SHARE_CLIENTS.name + ".tmp")
+    temporary.write_text(json.dumps({"shares": entries}, indent=2) + "\n")
+    temporary.replace(SHARE_CLIENTS)
+
+
+CLIENT_CACHE: dict = {"at": 0.0, "key": None, "value": {}}
+
+
+def share_client_map(spaces: list[dict], ttl: float = 5.0) -> dict[str, dict]:
+    """Per-space connection facts: who is on the share now, and who was last.
+
+    Cached for a few seconds because /api/state is polled and every space asks the
+    same question of the same daemon. The remembered machine is only written
+    when it changes, so a quiet host does not rewrite the registry on every read.
+    """
+    names = {str(space["slug"]): str(space.get("name") or space["slug"]) for space in spaces}
+    key = tuple(sorted(names.items()))
+    now = time.monotonic()
+    if CLIENT_CACHE["key"] == key and now - float(CLIENT_CACHE["at"]) <= ttl:
+        return CLIENT_CACHE["value"]
+    # A share can be reached by its label (what Windows shows) or by the account
+    # name Samba also accepts, so both map back to the space.
+    by_share: dict[str, str] = {}
+    for slug, name in names.items():
+        by_share[samba_share_label(name).lower()] = slug
+        by_share[slug.lower()] = slug
+    live: dict[str, list[dict]] = {}
+    for session in parse_share_sessions(smb_status()):
+        slug = by_share.get(session["service"].lower())
+        if slug:
+            live.setdefault(slug, []).append(
+                {"machine": session["machine"], "since": session["since"]}
+            )
+    remembered = load_share_clients()
+    changed = False
+    for slug, clients in live.items():
+        latest = max(clients, key=lambda client: client["since"] or "")
+        if not latest["machine"]:
+            continue
+        record = {"machine": latest["machine"], "since": latest["since"]}
+        if remembered.get(slug) != record:
+            remembered[slug] = record
+            changed = True
+    if changed:
+        try:
+            save_share_clients(remembered)
+        except OSError:
+            # The live answer is still true; only the memory of it is lost.
+            pass
+    value = {
+        slug: {"clients": live.get(slug, []), "lastClient": remembered.get(slug)}
+        for slug in names
+    }
+    CLIENT_CACHE.update(key=key, at=now, value=value)
+    return value
 
 
 def avahi_installed() -> bool:
