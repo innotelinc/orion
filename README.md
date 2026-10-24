@@ -90,6 +90,16 @@ from the registry. The original file is kept once as
 library is exported read-only to the group. Removing a space removes its account
 and share; removing the SMB app takes every account with it, and files stay.
 
+### The name on the LAN
+
+Mounting by address works, but the box answers to a name too. Samba registers
+`ORION-NAS` over NetBIOS (`netbios aliases = nas` keeps the old name working),
+so Windows reaches `\\ORION-NAS\<space>`. Installing **network discovery**
+publishes `_smb._tcp` through avahi and pins `host-name=orion-nas` in
+`/etc/avahi/avahi-daemon.conf`, so Finder, GNOME and macOS mount
+`smb://orion-nas.local/<space>`. Both come from the app rather than a hand edit,
+so a rebuilt container gets them back by installing the app again.
+
 ## Deployment
 
 The live copy is the `nas` Incus container (192.168.1.89) at

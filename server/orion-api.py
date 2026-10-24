@@ -46,6 +46,11 @@ SPACE_PALETTE = ["#0a63ff", "#8b5cf6", "#10b981", "#f59e0b", "#f43f5e", "#06b6d4
 SMB_CONF = Path("/etc/samba/smb.conf")
 SMB_CONF_BACKUP = Path("/etc/samba/smb.conf.orion-backup")
 SMB_GROUP = "orion-nas"
+# One name for the box on the LAN, whatever protocol a client speaks.
+DISCOVERY_NAME = "orion-nas"
+NETBIOS_NAME = "ORION-NAS"
+AVAHI_CONF = Path("/etc/avahi/avahi-daemon.conf")
+AVAHI_SERVICE = Path("/etc/avahi/services/orion-smb.service")
 APT_TIMEOUT = 900
 
 try:
@@ -84,10 +89,11 @@ APP_CATALOGUE: list[dict] = [
     {
         "id": "discovery",
         "name": "Network discovery",
-        "tagline": "Avahi, so the NAS shows up in Finder",
+        "tagline": f"Reachable as {DISCOVERY_NAME}.local",
         "description": (
-            "Advertises SMB on the LAN over mDNS, so clients find the box without an address "
-            "being typed in."
+            f"Advertises SMB over mDNS as {DISCOVERY_NAME}.local, so Finder, GNOME and Windows "
+            f"find the box by name instead of an address. Samba also answers to "
+            f"\\\\{NETBIOS_NAME} over NetBIOS."
         ),
         "category": "Network",
         "packages": ["avahi-daemon"],
@@ -849,6 +855,13 @@ def install_app(app_id: str) -> dict:
     if app["id"] == "smb":
         # The package ships its own smb.conf; replace it with the shares Orion knows.
         apply_smb_conf()
+    if app["id"] == "discovery":
+        # The name is the point of this app, so it is set here and not by hand.
+        apply_discovery()
+        if samba_installed():
+            # Samba's own NetBIOS name lives in smb.conf, which Orion generated
+            # before this app existed; rewrite it so both names agree.
+            apply_smb_conf()
     facts = app_facts(app)
     if not facts["installed"]:
         raise RuntimeError(f"{app['name']} did not finish installing")
@@ -901,6 +914,8 @@ def render_smb_conf(spaces: list[dict]) -> str:
         "[global]",
         "   workgroup = WORKGROUP",
         "   server string = Orion NAS",
+        f"   netbios name = {NETBIOS_NAME}",
+        "   netbios aliases = nas",
         "   server role = standalone server",
         "   map to guest = never",
         "   restrict anonymous = 2",
@@ -959,8 +974,54 @@ def apply_smb_conf() -> None:
         f"[ -f {SMB_CONF_BACKUP} ] || cp -f {SMB_CONF} {SMB_CONF_BACKUP} 2>/dev/null || true\n"
         f"cat > {SMB_CONF}\n"
         "systemctl enable --now smbd.service >/dev/null 2>&1 || true\n"
-        "smbcontrol smbd reload-config >/dev/null 2>&1 || systemctl restart smbd.service\n",
+        "smbcontrol smbd reload-config >/dev/null 2>&1 || systemctl restart smbd.service\n"
+        # nmbd is what answers NetBIOS name queries for \\\\ORION-NAS on Windows.
+        "systemctl enable --now nmbd.service >/dev/null 2>&1 || true\n"
+        "systemctl try-restart nmbd.service >/dev/null 2>&1 || true\n",
         stdin_text=content,
+        timeout=120,
+    )
+
+
+def avahi_installed() -> bool:
+    return dpkg_installed("avahi-daemon")
+
+
+def render_avahi_service() -> str:
+    """The Bonjour record: SMB on 445, published under the box's own name."""
+    return (
+        '<?xml version="1.0" standalone=\'no\'?>\n'
+        '<!DOCTYPE service-group SYSTEM "avahi-service.dtd">\n'
+        "<service-group>\n"
+        '  <name replace-wildcards="yes">Orion NAS on %h</name>\n'
+        "  <service>\n"
+        "    <type>_smb._tcp</type>\n"
+        "    <port>445</port>\n"
+        "  </service>\n"
+        "</service-group>\n"
+    )
+
+
+def apply_discovery() -> None:
+    """Answer to a name on the LAN, so nobody has to remember an address.
+
+    mDNS is what Finder, GNOME Files and the Windows DNS client resolve, so the
+    host name is set explicitly rather than inherited from the container.
+    """
+    if not avahi_installed():
+        return
+    service = render_avahi_service()
+    run_root(
+        "set -e\n"
+        f"[ -f {AVAHI_CONF} ] || exit 0\n"
+        f"sed -i 's/^#*host-name=.*/host-name={DISCOVERY_NAME}/' {AVAHI_CONF}\n"
+        f"grep -q '^host-name={DISCOVERY_NAME}' {AVAHI_CONF} || "
+        f"sed -i '/^\\[server\\]/a host-name={DISCOVERY_NAME}' {AVAHI_CONF}\n"
+        f"mkdir -p {AVAHI_SERVICE.parent}\n"
+        f"cat > {AVAHI_SERVICE}\n"
+        "systemctl enable avahi-daemon.service >/dev/null 2>&1 || true\n"
+        "systemctl restart avahi-daemon.service\n",
+        stdin_text=service,
         timeout=120,
     )
 
