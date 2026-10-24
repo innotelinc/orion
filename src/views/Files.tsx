@@ -284,6 +284,13 @@ export function Files({ navigate, initialPath, initialTrash, highlightId }: File
     setAddressActive(addressSuggestions.length > 0 ? 0 : -1)
   }, [addressDraft, addressSuggestions.length])
 
+  // What the field points at right now, so a path is known to be a folder while
+  // it is being typed rather than only after Enter fails.
+  const addressTarget = (addressDraft ?? '').trim().replace(/\/+$/, '') || '/'
+  const addressResolves =
+    addressTarget === '/' ||
+    files.some((node) => node.type === 'folder' && node.id === addressTarget)
+
   const completeAddress = (name: string) => {
     const next = `${addressParts.prefix}${name}/`
     setAddressDraft(next)
@@ -581,6 +588,7 @@ export function Files({ navigate, initialPath, initialTrash, highlightId }: File
                   aria-autocomplete="list"
                   aria-expanded={addressSuggestions.length > 0}
                   aria-controls="files-address-menu"
+                  aria-describedby="files-address-state"
                   onKeyDown={(event) => {
                     if (event.key === 'Tab' && addressSuggestions.length > 0) {
                       const choice =
@@ -614,6 +622,20 @@ export function Files({ navigate, initialPath, initialTrash, highlightId }: File
                   }}
                   onBlur={cancelAddressEdit}
                 />
+                <span
+                  id="files-address-state"
+                  className={classNames(
+                    'files-address__state',
+                    addressResolves ? 'is-folder' : 'is-missing',
+                  )}
+                  title={
+                    addressResolves
+                      ? `A folder: ${addressTarget}`
+                      : `Nothing at ${addressTarget}`
+                  }
+                >
+                  {addressResolves ? 'folder' : 'no such folder'}
+                </span>
                 {addressSuggestions.length > 0 ? (
                   <ul
                     className="files-address__menu"

@@ -334,7 +334,25 @@
   background: var(--surface-3);
   color: var(--text);
 }
+/* States the field's verdict while typing: a path is a folder or it is not,
+   and saying which beside it beats finding out by pressing Enter. */
+.files-address__state {
+  flex: 0 0 auto;
+  padding-left: 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.files-address__state.is-folder {
+  color: var(--success);
+}
+.files-address__state.is-missing {
+  color: var(--warning);
+}
 .files-address__input {
+  flex: 1 1 auto;
+  min-width: 0;
   width: 100%;
   height: 28px;
   padding: 3px 8px;

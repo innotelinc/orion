@@ -242,6 +242,20 @@ const completions = {
     (node) => node.textContent.trim() === 'ada',
   ),
 }
+// The field has to say whether what is typed is a folder while it is being
+// typed, not only when Enter fails.
+await pressKey({ key: 'l', ctrlKey: true })
+await setField('/Users')
+const stateForFolder =
+  window.document.querySelector('.files-address__state')?.textContent?.trim() ?? null
+await setField('/nope')
+const stateForMissing =
+  window.document.querySelector('.files-address__state')?.textContent?.trim() ?? null
+fieldValue()?.dispatchEvent(
+  new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+)
+await new Promise((resolve) => setTimeout(resolve, 60))
+const pathState = { stateForFolder, stateForMissing }
 const addressBar = {
   opens: Boolean(addressInput),
   openedPath,
@@ -252,6 +266,7 @@ const addressBar = {
   cmdL: cmdLCheck,
   escapeRestoresCrumbs: Boolean(window.document.querySelector('.breadcrumbs button')),
   completions,
+  pathState,
 }
 // Deletes are recoverable, so the pane that proves it has to open and list what
 // was deleted, with the folder each item came from and a way back.
@@ -434,6 +449,8 @@ const broken =
   summary.routes.addressBar.completions.afterFirstTab !== '/Users/' ||
   summary.routes.addressBar.completions.afterSecondTab !== '/Users/ada/' ||
   !summary.routes.addressBar.completions.navigated ||
+  summary.routes.addressBar.pathState.stateForFolder !== 'folder' ||
+  summary.routes.addressBar.pathState.stateForMissing !== 'no such folder' ||
   !summary.routes.dashboardShares.card ||
   !summary.routes.dashboardShares.namesTheClient ||
   summary.routes.dashboardShares.live === 0 ||
