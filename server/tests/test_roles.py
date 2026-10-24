@@ -463,6 +463,14 @@ class ShareClientTestCase(unittest.TestCase):
         )
         self.assertEqual(rows[0]["since"], "2026-10-24T14:55:12Z")
 
+    def test_samba_microseconds_become_milliseconds(self):
+        # Safari parses three fractional digits and no more; "Unknown" in the
+        # dialog would look like the API had nothing to say.
+        rows = self.api.parse_share_sessions(
+            {"tcons": [{"service": "ada", "machine": "desktop", "connected_at": "2026-10-24T19:38:21.500101+00:00"}]}
+        )
+        self.assertEqual(rows[0]["since"], "2026-10-24T19:38:21.500Z")
+
     def test_the_ipc_connection_is_not_a_share(self):
         rows = self.api.parse_share_sessions(
             {"tcons": [{"service": "IPC$", "machine": "desktop"}, {"service": "ada", "machine": "desktop"}]}

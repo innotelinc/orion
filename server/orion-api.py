@@ -1619,8 +1619,22 @@ def parse_share_sessions(payload: dict) -> list[dict]:
         if since.isdigit():
             # Some builds report the connect time as epoch seconds.
             since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(since)))
+        elif since:
+            since = trim_fraction(since)
         found.append({"service": service, "machine": machine, "since": since})
     return found
+
+
+def trim_fraction(value: str) -> str:
+    """Six fractional digits are what Samba sends; Safari parses three at most."""
+    match = re.match(
+        r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$", value
+    )
+    if match is None:
+        return value
+    base, fraction, zone = match.groups()
+    zone = "Z" if zone is None or zone in ("+00:00", "+0000", "-00:00", "-0000") else zone
+    return f"{base}.{(fraction or '000')[:3]}{zone}"
 
 
 def load_share_clients() -> dict[str, dict]:
