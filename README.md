@@ -130,11 +130,55 @@ the live instance:
   `open_by_handle_at`, which this container's sandbox answers with `ENOSYS`. The
   mount appears and then every operation returns `Remote I/O error`.
 
-SMB covers Linux and macOS clients as well, so those shares are the supported
-path. For native NFS, export the storage from the incus host that holds the
-dataset: `apt install nfs-kernel-server`, add the storage path to
-`/etc/exports`, and `exportfs -ra`. The container path is `/srv/storage` inside
-Orion; export the host's own dataset rather than the container's view of it.
+SMB covers Linux and macOS clients as well. Native NFS is served by the **host**
+that holds the dataset, not by the container — this is the working setup on
+`192.168.1.51`, and the recipe for any other incus host.
+
+### NFS on the host
+
+Orion's storage is an incus custom volume. Find where the host mounts it:
+
+```sh
+zfs get -H -o value mountpoint tank/incus/custom/default_nas-data   # legacy
+findmnt -t zfs | grep nas-data
+# /var/lib/incus/storage-pools/incus/custom/default_nas-data
+```
+
+`/etc/exports.d/orion.exports` (nfs-kernel-server reads the `*.exports` files in
+that directory, so the host's own `/etc/exports` is left alone):
+
+```
+/var/lib/incus/storage-pools/incus/custom/default_nas-data/Users/household  192.168.1.0/24(rw,sync,no_subtree_check,all_squash,anonuid=1001001,anongid=1001001)
+/var/lib/incus/storage-pools/incus/custom/default_nas-data/media             192.168.1.0/24(ro,sync,no_subtree_check,all_squash,anonuid=1000000,anongid=1000000)
+```
+
+`exportfs -ra`, then `exportfs -v` to confirm. Two things about those ids:
+
+- incus shifts container ids by its idmap base (1000000 here), so the container's
+  `household` (uid 1001) is **1001001** on the host. `all_squash` maps every NFS
+  client onto it, which is why a file written from a Linux client lands as
+  `household:orion-nas 1001:1001` inside Orion — the same owner SMB writes as.
+- `media` is read-only on purpose; the export refuses writes with `Read-only
+  file system` rather than a permission error.
+
+A client mounts the real export path (NFS exports are paths, not aliases):
+
+```sh
+mount -t nfs4 -o vers=4.2 192.168.1.51:/var/lib/incus/storage-pools/incus/custom/default_nas-data/Users/household /mnt/household
+```
+
+The export survives a host reboot: `nfs-server` is enabled, and nfs-utils'
+own generator orders it after the incus volume's mount unit. A drop-in
+(`/etc/systemd/system/nfs-server.service.d/orion-storage.conf`) additionally
+makes it `After=incus.service` and re-runs `exportfs -ra` once the volume shows
+up, so a slow pool cannot leave the export missing. If the volume never appears
+it logs `orion: the NAS dataset was not mounted; nfs-server started without it`
+— the export path only exists inside the dataset, so nothing is ever published
+for an empty mountpoint.
+
+NFSv4 with `sys` security has no password of its own: anyone on the LAN who can
+reach 2049 is the household account, so do not put private material in the
+household share, and keep 2049 off the internet.
 
 The service is `ProtectSystem=strict`, which is what keeps a bug here out of
 `/etc`. apt, `useradd` and `smbpasswd` genuinely need that access, so each change
