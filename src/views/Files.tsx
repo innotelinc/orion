@@ -197,6 +197,29 @@ export function Files({ navigate, initialPath, initialTrash, highlightId }: File
     setAddressDraft(currentPath)
   }
 
+  // Ctrl+L and Cmd+L open the path bar, the way a browser's own address bar
+  // does. A browser that keeps the chord for itself still wins — nothing on the
+  // page can take it back — but an installed window and every browser that
+  // passes it on get the same one-click path.
+  useEffect(() => {
+    if (trashOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'l' || event.repeat) return
+      if (!event.ctrlKey && !event.metaKey) return
+      if (event.altKey || event.shiftKey) return
+      event.preventDefault()
+      if (addressDraft !== null) {
+        // Already open: the shortcut should re-select what is there, not throw
+        // away a path that is half typed.
+        addressRef.current?.select()
+        return
+      }
+      setAddressDraft(currentPath)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [addressDraft, currentPath, trashOpen])
+
   const cancelAddressEdit = () => setAddressDraft(null)
 
   const submitAddress = () => {
@@ -517,7 +540,7 @@ export function Files({ navigate, initialPath, initialTrash, highlightId }: File
                 <span>
                   <button
                     type="button"
-                    title={currentPath === '/' ? 'Edit the path' : undefined}
+                    title={currentPath === '/' ? 'Edit the path (Ctrl+L)' : undefined}
                     onClick={() =>
                       currentPath === '/'
                         ? startAddressEdit()
@@ -544,7 +567,7 @@ export function Files({ navigate, initialPath, initialTrash, highlightId }: File
                         <button
                           type="button"
                           aria-current={here ? 'page' : undefined}
-                          title={here ? 'Edit the path' : undefined}
+                          title={here ? 'Edit the path (Ctrl+L)' : undefined}
                           onClick={() =>
                             here ? startAddressEdit() : navigate('files', { path: crumb.path })
                           }

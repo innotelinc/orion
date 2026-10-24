@@ -177,12 +177,37 @@ if (addressInput) {
     (node) => node.textContent.trim() === 'media',
   )
 }
+// Ctrl+L and Cmd+L are the keyboard half of the same bar: they must open it on
+// the folder in view, with everything selected, and Escape must give the crumbs
+// back so the shortcut cannot trap the toolbar in edit mode.
+const pressKey = async (init) => {
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, ...init }))
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  return window.document.querySelector('.files-address__input')
+}
+const ctrlL = await pressKey({ key: 'l', ctrlKey: true })
+const ctrlLCheck = {
+  opens: Boolean(ctrlL),
+  path: ctrlL?.value ?? null,
+  allSelected: Boolean(ctrlL)
+    ? ctrlL.selectionStart === 0 && ctrlL.selectionEnd === (ctrlL.value ?? '').length
+    : false,
+}
+ctrlL?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+await new Promise((resolve) => setTimeout(resolve, 60))
+const cmdL = await pressKey({ key: 'l', metaKey: true })
+const cmdLCheck = { opens: Boolean(cmdL), path: cmdL?.value ?? null }
+cmdL?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+await new Promise((resolve) => setTimeout(resolve, 60))
 const addressBar = {
   opens: Boolean(addressInput),
   openedPath,
   focused,
   allSelected,
   typedPath,
+  ctrlL: ctrlLCheck,
+  cmdL: cmdLCheck,
+  escapeRestoresCrumbs: Boolean(window.document.querySelector('.breadcrumbs button')),
 }
 // Deletes are recoverable, so the pane that proves it has to open and list what
 // was deleted, with the folder each item came from and a way back.
@@ -355,6 +380,12 @@ const broken =
   !summary.routes.addressBar.opens ||
   !summary.routes.addressBar.allSelected ||
   !summary.routes.addressBar.typedPath ||
+  !summary.routes.addressBar.ctrlL.opens ||
+  !summary.routes.addressBar.ctrlL.allSelected ||
+  summary.routes.addressBar.ctrlL.path !== '/media' ||
+  !summary.routes.addressBar.cmdL.opens ||
+  summary.routes.addressBar.cmdL.path !== '/media' ||
+  !summary.routes.addressBar.escapeRestoresCrumbs ||
   !summary.routes.dashboardShares.card ||
   !summary.routes.dashboardShares.namesTheClient ||
   summary.routes.dashboardShares.live === 0 ||
