@@ -58,18 +58,30 @@ const server = createServer(async (request, response) => {
     response.writeHead(200, { 'Content-Type': 'application/json' }).end(body)
     return
   }
-  const file = url.pathname === '/' || url.pathname === '/app/' ? 'index.html' : url.pathname.slice(1)
-  try {
-    let body = await readFile(join(dist, file))
-    if (file === 'index.html') {
-      // jsdom does not execute module scripts; the bundle has no top-level
-      // import/export, so a classic deferred script is equivalent here.
-      body = Buffer.from(body.toString().replace('type="module"', 'defer'))
+  // The bundle is built with a base of `/<repo>/` when GITHUB_REPOSITORY is set
+  // (GitHub Pages), so index.html asks for `/orion/assets/…` on CI and for
+  // `/assets/…` locally. Serving from dist means trying the path with its first
+  // segment removed as well.
+  const [, , ...rest] = url.pathname.split('/')
+  const files = url.pathname === '/' || url.pathname === '/app/' ? ['index.html'] : [url.pathname.slice(1)]
+  if (rest.length > 0) files.push(rest.join('/'))
+  for (const file of files) {
+    try {
+      let body = await readFile(join(dist, file))
+      if (file === 'index.html') {
+        // jsdom does not execute module scripts; the bundle has no top-level
+        // import/export, so a classic deferred script is equivalent here.
+        body = Buffer.from(body.toString().replace('type="module"', 'defer'))
+      }
+      response
+        .writeHead(200, { 'Content-Type': types[extname(file)] ?? 'application/octet-stream' })
+        .end(body)
+      return
+    } catch {
+      continue
     }
-    response.writeHead(200, { 'Content-Type': types[extname(file)] ?? 'application/octet-stream' }).end(body)
-  } catch {
-    response.writeHead(404).end()
   }
+  response.writeHead(404).end()
 })
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 const origin = `http://127.0.0.1:${server.address().port}`
