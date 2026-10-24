@@ -1573,19 +1573,21 @@ def smb_status() -> dict:
     """Samba's own view of who is connected, as JSON. {} when it cannot say.
 
     `smbstatus` only reports other people's sessions to root, and orion-api runs
-    as root, so every session is visible. A host without Samba — or with the
-    daemon stopped — answers nothing, which is a fact rather than an error.
+    as root, so every session is visible. It also needs to write its messaging
+    socket, which this service's read-only sandbox refuses (`Unable to initialize
+    messaging context`), so the query runs the same way apt does: in a transient
+    unit with the daemon's privileges and none of its sandbox. A host without
+    Samba — or with the daemon stopped — answers nothing, which is a fact rather
+    than an error.
     """
     if not samba_installed():
         return {}
     try:
-        completed = subprocess.run(
-            ["smbstatus", "--json"], capture_output=True, text=True, timeout=8
-        )
-    except (OSError, subprocess.SubprocessError):
+        output = run_root("smbstatus --json", timeout=8)
+    except (OSError, RuntimeError, subprocess.SubprocessError):
         return {}
     try:
-        payload = json.loads(completed.stdout or "{}")
+        payload = json.loads(output or "{}")
     except ValueError:
         return {}
     return payload if isinstance(payload, dict) else {}
