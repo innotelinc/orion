@@ -228,9 +228,11 @@ There is no reason to copy files into the container by hand: anything installed
 that way is gone at the next deploy, and it is exactly the state that two
 terminals used to fight over.
 
-The container builds the desktop itself, so it needs room to do it: the live one
-runs with `limits.memory 2GiB`. At the 256 MiB it was created with, `vite` is
-OOM-killed and the only trace is the word `Killed` in the deploy log.
+The container builds the desktop itself, so it needs room to do it: give it a
+gigabyte or more (`incus config set <container> limits.memory 2GiB`). At the
+256 MiB it was created with, `vite` is OOM-killed and the only trace is the word
+`Killed` in the deploy log. The live container currently builds in 640 MiB,
+which works but leaves little headroom.
 
 ### Sign-in
 
