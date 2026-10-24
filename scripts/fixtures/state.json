@@ -137,16 +137,16 @@
     {
       "id": "nfs",
       "name": "NFS server",
-      "tagline": "Kernel NFS for Linux and macOS clients",
-      "description": "Installs the NFS server and starts it.",
+      "tagline": "NFSv4 for Linux and macOS, no kernel nfsd needed",
+      "description": "Installs nfs-ganesha, a userspace NFSv4 server.",
       "category": "Sharing",
-      "packages": ["nfs-kernel-server"],
-      "unit": "nfs-server.service",
+      "packages": ["nfs-ganesha", "nfs-ganesha-vfs"],
+      "unit": "nfs-ganesha.service",
       "installed": false,
       "active": false,
       "state": "not installed",
-      "available": false,
-      "unavailable": "This container cannot mount the kernel nfsd filesystem, so it cannot export NFS. Run the export on the host, or use SMB."
+      "available": true,
+      "unavailable": ""
     },
     {
       "id": "discovery",

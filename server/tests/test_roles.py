@@ -1070,44 +1070,74 @@ class TrashTestCase(unittest.TestCase):
 
 
 class AppCatalogueTestCase(unittest.TestCase):
-    """An entry the container cannot run must say so before anybody installs it."""
+    """NFS here is userspace: the kernel server cannot run in a container."""
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name) / "storage"
         self.root.mkdir()
+        (self.root / "media").mkdir()
         self.api = load_api(self.root)
-        self.api.NFS_CAPABLE = None
+        self.admin = self.api.session_facts(identity("boss@example.test"))
+        self.household = self.api.create_space(
+            {"name": "Household", "email": "", "role": "Member"}, self.admin
+        )
+        self.person = self.api.create_space(
+            {"name": "Ada Lovelace", "email": "ada@example.test", "role": "Member"}, self.admin
+        )
+        spaces = self.api.load_spaces()
+        for space in spaces:
+            space["smb"] = True
+            space["shared"] = space["slug"] == "household"
+        self.api.save_spaces(spaces)
+        # The Unix account does not exist in a test, so the ids are stubbed.
+        self.api.space_owner_ids = lambda slug: (1200, 1300) if slug == "household" else (0, 0)
 
     def tearDown(self):
         self.temporary.cleanup()
 
-    def _nfs(self):
-        return next(app for app in self.api.apps_facts() if app["id"] == "nfs")
+    def _blocks(self):
+        conf = self.api.render_ganesha_conf(self.api.load_spaces())
+        return conf, conf.split("EXPORT {")[1:]
 
-    def test_nfs_is_unavailable_where_the_kernel_will_not_mount_it(self):
-        def refuse(script, **kwargs):
-            raise RuntimeError("mount: /proc/fs/nfsd: permission denied.")
-
-        self.api.run_root = refuse
-        entry = self._nfs()
-        self.assertFalse(entry["available"])
-        self.assertIn("nfsd", entry["unavailable"])
-
-    def test_installing_it_there_is_refused_before_apt_runs(self):
-        def refuse(script, **kwargs):
-            raise RuntimeError("mount: /proc/fs/nfsd: permission denied.")
-
-        self.api.run_root = refuse
-        with self.assertRaises(ValueError) as caught:
-            self.api.install_app("nfs")
-        self.assertIn("cannot serve NFS", str(caught.exception))
-
-    def test_a_capable_host_offers_it(self):
-        self.api.run_root = lambda script, **kwargs: ""
-        entry = self._nfs()
+    def test_the_entry_is_the_userspace_server(self):
+        entry = next(app for app in self.api.apps_facts() if app["id"] == "nfs")
+        self.assertIn("nfs-ganesha", entry["packages"])
+        self.assertEqual(entry["unit"], "nfs-ganesha.service")
         self.assertTrue(entry["available"])
-        self.assertEqual(entry["unavailable"], "")
+
+    def test_only_the_shared_space_is_exported_and_writes_as_its_owner(self):
+        conf, blocks = self._blocks()
+        household = next(block for block in blocks if 'Pseudo = "/household"' in block)
+        self.assertIn("Access_Type = RW", household)
+        self.assertIn("Squash = All_Squash", household)
+        self.assertIn("Anonymous_UID = 1200", household)
+        self.assertIn("Anonymous_GID = 1300", household)
+        # A personal share stays on SMB: NFSv4 with sys security cannot ask for
+        # a password, so exporting it would publish it.
+        self.assertNotIn('Pseudo = "/ada-lovelace"', conf)
+
+    def test_the_media_library_is_exported_read_only(self):
+        conf, blocks = self._blocks()
+        media = next(block for block in blocks if 'Pseudo = "/media"' in block)
+        self.assertIn("Access_Type = RO", media)
+        self.assertIn("Anonymous_UID = 65534", media)
+
+    def test_the_config_is_written_and_the_service_reloaded(self):
+        captured = {}
+
+        def record(script, **kwargs):
+            captured["script"] = script
+            captured["stdin"] = kwargs.get("stdin_text", "")
+            return ""
+
+        self.api.ganesha_installed = lambda: True
+        self.api.run_root = record
+        self.api.apply_nfs_exports()
+        self.assertIn("cat > ", captured["script"])
+        self.assertIn("ganesha.conf", captured["script"])
+        self.assertIn("reload-or-restart nfs-ganesha.service", captured["script"])
+        self.assertIn('Pseudo = "/household"', captured["stdin"])
 
 
 if __name__ == "__main__":

@@ -112,16 +112,25 @@ It runs as `orion-api.service` and is only reachable through nginx.
 accepted — the endpoint does not take a package name from the browser.
 
 Each entry also carries `available` and, when it is false, `unavailable`: the
-reason in a sentence. **NFS server is unavailable in this container.** nfsd is a
-kernel filesystem rather than a daemon, and an unprivileged container cannot
-mount `/proc/fs/nfsd`, so `proc-fs-nfsd.mount` fails, `nfs-server.service` fails
-with it — and apt installs the packages without complaint. The API therefore
-probes with a real mount attempt (once per process) and refuses
-the install with that reason instead of leaving a systemd error to be read
-later. The store shows the entry as *unavailable*, offers **Remove** if the
-packages are already there, and never offers an install or a restart it knows
-cannot work. An NFS export belongs on the host; SMB is what this container
-serves.
+reason in a sentence, so a store card can say *cannot run here* before anybody
+presses install.
+
+**NFS is served in userspace.** The kernel's `nfsd` is a filesystem rather than
+a daemon, and an unprivileged container cannot mount `/proc/fs/nfsd`, so
+`nfs-kernel-server` installs cleanly and then fails to start with it. **NFS
+server** therefore installs `nfs-ganesha` + `nfs-ganesha-vfs` — a userspace NFSv4
+server — and Orion writes `/etc/ganesha/ganesha.conf` from the registry:
+
+- the **household share** (a space with `shared: true`) read-write, all-squashed
+  onto that space's Unix account;
+- the **media library** read-only;
+- nothing else. NFSv4 with `sys` security trusts whatever uid a client claims, so
+exporting a person's private folder would publish it — those stay on SMB, which
+asks for a password.
+
+It listens on NFSv4/TCP 2049 only, so no rpcbind or mountd is involved. A Linux
+or macOS client mounts `mount -t nfs4 <nas-address>:/household /mnt`, and the
+config is rewritten whenever a shared space changes.
 
 The service is `ProtectSystem=strict`, which is what keeps a bug here out of
 `/etc`. apt, `useradd` and `smbpasswd` genuinely need that access, so each change

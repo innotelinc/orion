@@ -163,10 +163,10 @@ const trashPane = {
 }
 const appsText = await at('#/apps')
 const unitCards = window.document.querySelectorAll('.store-card').length
-// An entry the container cannot run says so on the card, and offers no install.
+// NFS is the userspace server, and it must be installable from the card.
 const appsCatalogue = {
-  statesWhy: appsText.includes('cannot mount the kernel nfsd filesystem'),
-  noInstall: ![...window.document.querySelectorAll('.store-card')]
+  userspace: appsText.includes('nfs-ganesha'),
+  installable: [...window.document.querySelectorAll('.store-card')]
     .filter((card) => card.textContent.includes('NFS server'))
     .some((card) =>
       [...card.querySelectorAll('button')].some((button) => button.textContent.trim() === 'Install'),
@@ -289,8 +289,8 @@ const broken =
   summary.routes.serviceCards === 0 ||
   summary.routes.poolCards === 0 ||
   !summary.routes.servicesShowNginx ||
-  !summary.routes.appsCatalogue.statesWhy ||
-  !summary.routes.appsCatalogue.noInstall ||
+  !summary.routes.appsCatalogue.userspace ||
+  !summary.routes.appsCatalogue.installable ||
   !summary.routes.generalShowsRuntime ||
   !summary.routes.aboutShowsBuild ||
   !summary.signOutOffered ||
