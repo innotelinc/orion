@@ -119,10 +119,51 @@ steps directly when `/run/systemd/system` is absent — the same code paths serv
 both shapes. `docker-compose.yml` uses `network_mode: host` so mDNS has a real
 LAN and SMB is reachable; only the HTTP port needs to be free.
 
-Sign-in is not in the container: put your own proxy in front of it and forward
-`X-Auth-Request-Email`. `deploy/sso/` is the oauth2-proxy configuration this
-project runs, including the `--prompt=login` that stops a surviving provider
-session from signing a signed-out browser straight back in.
+### Sign-in
+
+The image itself has no login. `docker-compose.sso.yml` adds oauth2-proxy in
+front of it, which is the same shape the live estate runs:
+
+```
+browser → your vhost (TLS) → orion-sso :4180 → orion :8080 → /api → orion-api
+```
+
+The proxy authenticates against your OIDC provider and passes the identity as
+`X-Auth-Request-Email` / `-User` / `-Groups`; nginx hands those to the API, which
+is what Settings → Security shows and what the desktop greets you by. Nothing in
+the app reads a password or a token.
+
+```bash
+./install.sh --sso
+```
+
+Register `https://<your host>/oauth2/callback` at the provider first. Then fill
+in `.env`:
+
+| Key | Meaning |
+| --- | --- |
+| `ORION_PUBLIC_URL` | the public origin, e.g. `https://nas.example.com` |
+| `OIDC_ISSUER_URL` | the provider's discovery URL, e.g. `https://auth.example.com/application/o/orion/` |
+| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | the confidential client |
+| `ORION_SSO_PORT` | where the proxy listens (default 4180) |
+| `ORION_SSO_BIND` | `127.0.0.1` by default; set `0.0.0.0` only if the public vhost is another machine |
+| `OIDC_ALLOWED_GROUP` | optional: refuse anyone outside this provider group |
+
+With sign-in on, point the public vhost at the proxy port and leave the app's
+`:8080` on loopback. Two details cost an afternoon if missed:
+
+- The proxy sends `prompt=login` on every authorize request. A provider session
+  outlives the proxy cookie, so without it a signed-out browser is let straight
+  back in and sign-out appears to do nothing.
+- The id_token's `email` must be marked verified, or oauth2-proxy refuses the
+  callback with a 500 while the log says the address is unverified. Authentik's
+  stock mapping says false; `deploy/sso/provision-authentik.py` names the mapping
+  that says true.
+
+Authentik specifics are in `deploy/sso/`: the provider is OAuth2/OpenID with
+client type *confidential*, the grant types are `authorization_code` and
+`refresh_token`, and the groups claim is `groups`. Other providers work the same
+way — the only thing Orion requires is a group or email claim it can display.
 
 ### Incus (the live instance)
 

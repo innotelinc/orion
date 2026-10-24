@@ -1,0 +1,44 @@
+# Sign-in in front of the desktop, for a server that has an OIDC provider.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.sso.yml up -d
+#   ./install.sh --sso          # same thing, with the env checks done for you
+#
+# The proxy listens on ORION_SSO_BIND:ORION_SSO_PORT and forwards to the desktop
+# on loopback, so the public vhost should point at the proxy, never at the app.
+# With sign-in on, the app's own port is an unauthenticated bypass — keep it on
+# loopback (the default) or firewall it.
+services:
+  orion-sso:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.8.2
+    container_name: orion-sso
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - orion
+    environment:
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_CLIENT_ID: ${OIDC_CLIENT_ID}
+      OAUTH2_PROXY_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OIDC_COOKIE_SECRET}
+      OAUTH2_PROXY_OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}
+      OAUTH2_PROXY_REDIRECT_URL: ${ORION_PUBLIC_URL}/oauth2/callback
+      OAUTH2_PROXY_UPSTREAMS: http://127.0.0.1:${ORION_HTTP_PORT:-8080}
+      OAUTH2_PROXY_HTTP_ADDRESS: ${ORION_SSO_BIND:-127.0.0.1}:${ORION_SSO_PORT:-4180}
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      OAUTH2_PROXY_PASS_USER_HEADERS: "true"
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      OAUTH2_PROXY_COOKIE_SAMESITE: lax
+      OAUTH2_PROXY_WHITELIST_DOMAINS: ${ORION_PUBLIC_URL}
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      # Same reason as the live estate: a provider session outlives the proxy's
+      # cookie, so without this a signed-out browser is let straight back in.
+      OAUTH2_PROXY_PROMPT: login
+      # Probes carry no data; everything else, the API included, needs a session.
+      OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/health$
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_OIDC_GROUPS_CLAIM: groups
+      OAUTH2_PROXY_SCOPE: openid email profile groups
+      OAUTH2_PROXY_SILENCE_PING_LOGGING: "true"
+      # Optional: OIDC_ALLOWED_GROUP=GroupName restricts sign-in to one group.
+      OAUTH2_PROXY_ALLOWED_GROUP: ${OIDC_ALLOWED_GROUP:-}
