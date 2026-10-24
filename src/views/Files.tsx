@@ -130,7 +130,11 @@ export function Files({ navigate, initialPath, initialTrash, highlightId }: File
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [emptyTrashOpen, setEmptyTrashOpen] = useState(false)
   const [trashBusy, setTrashBusy] = useState(false)
+  // The path is a real address bar: one click puts the whole path in an input,
+  // selected, so it can be typed over instead of double-clicked word by word.
+  const [addressDraft, setAddressDraft] = useState<string | null>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
+  const addressRef = useRef<HTMLInputElement>(null)
 
   const entries = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -180,6 +184,39 @@ export function Files({ navigate, initialPath, initialTrash, highlightId }: File
     }, 180)
     return () => window.clearTimeout(timer)
   }, [files, highlightId])
+
+  useEffect(() => {
+    const input = addressRef.current
+    if (!input) return
+    input.focus()
+    input.select()
+  }, [addressDraft])
+
+  const startAddressEdit = () => {
+    if (trashOpen) return
+    setAddressDraft(currentPath)
+  }
+
+  const cancelAddressEdit = () => setAddressDraft(null)
+
+  const submitAddress = () => {
+    if (addressDraft === null) return
+    const trimmed = addressDraft.trim().replace(/^\/+|\/+$/g, '')
+    const path = trimmed ? `/${trimmed}` : '/'
+    // A typo should say so and keep the field open, rather than dropping the
+    // browser into a folder that does not exist and looks empty.
+    const known =
+      path === '/' || files.some((node) => node.id === path && node.type === 'folder')
+    if (!known) {
+      pushToast({ title: 'No such folder', description: path, tone: 'error' })
+      addressRef.current?.select()
+      return
+    }
+    setAddressDraft(null)
+    setQuery('')
+    setSelectedIds(new Set())
+    navigate('files', { path })
+  }
 
   const breadcrumbs = useMemo(() => {
     const segments = currentPath.split('/').filter(Boolean)
@@ -448,35 +485,78 @@ export function Files({ navigate, initialPath, initialTrash, highlightId }: File
 
         <div className="files-main">
           <div className="files-toolbar">
-            <nav className="breadcrumbs" aria-label="Breadcrumb">
-              <span>
-                <button type="button" onClick={() => navigate('files', { path: '/' })}>
-                  <HardDrive size={12} aria-hidden="true" />
-                  Orion
-                </button>
-              </span>
-              {trashOpen ? (
+            {addressDraft !== null ? (
+              <label className="files-address">
+                <span className="sr-only">Path</span>
+                <input
+                  ref={addressRef}
+                  className="files-address__input"
+                  value={addressDraft}
+                  aria-label="Path"
+                  spellCheck={false}
+                  autoComplete="off"
+                  onChange={(event) => setAddressDraft(event.target.value)}
+                  // One click selects the whole path, so the next keystroke
+                  // replaces it: no second click or drag to clear it first.
+                  onFocus={(event) => event.currentTarget.select()}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      submitAddress()
+                    }
+                    if (event.key === 'Escape') {
+                      event.preventDefault()
+                      cancelAddressEdit()
+                    }
+                  }}
+                  onBlur={cancelAddressEdit}
+                />
+              </label>
+            ) : (
+              <nav className="breadcrumbs" aria-label="Breadcrumb">
                 <span>
-                  <ChevronRight size={12} aria-hidden="true" />
-                  <button type="button" aria-current="page">
-                    Trash
+                  <button
+                    type="button"
+                    title={currentPath === '/' ? 'Edit the path' : undefined}
+                    onClick={() =>
+                      currentPath === '/'
+                        ? startAddressEdit()
+                        : navigate('files', { path: '/' })
+                    }
+                  >
+                    <HardDrive size={12} aria-hidden="true" />
+                    Orion
                   </button>
                 </span>
-              ) : (
-                breadcrumbs.slice(1).map((crumb, index) => (
-                  <span key={crumb.path}>
+                {trashOpen ? (
+                  <span>
                     <ChevronRight size={12} aria-hidden="true" />
-                    <button
-                      type="button"
-                      aria-current={index === breadcrumbs.length - 2 ? 'page' : undefined}
-                      onClick={() => navigate('files', { path: crumb.path })}
-                    >
-                      {crumb.label}
+                    <button type="button" aria-current="page">
+                      Trash
                     </button>
                   </span>
-                ))
-              )}
-            </nav>
+                ) : (
+                  breadcrumbs.slice(1).map((crumb) => {
+                    const here = crumb.path === currentPath
+                    return (
+                      <span key={crumb.path}>
+                        <ChevronRight size={12} aria-hidden="true" />
+                        <button
+                          type="button"
+                          aria-current={here ? 'page' : undefined}
+                          title={here ? 'Edit the path' : undefined}
+                          onClick={() =>
+                            here ? startAddressEdit() : navigate('files', { path: crumb.path })
+                          }
+                        >
+                          {crumb.label}
+                        </button>
+                      </span>
+                    )
+                  })
+                )}
+              </nav>
+            )}
 
             <div className="files-toolbar__actions">
               {trashOpen ? (

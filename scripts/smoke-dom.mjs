@@ -144,6 +144,46 @@ const filesShares = {
   rows: window.document.querySelectorAll('.files-sidebar .share-dot').length,
   live: window.document.querySelectorAll('.files-sidebar .share-dot--live').length,
 }
+// The path bar is meant to be one click from editable, with the whole path
+// selected so the next keystroke replaces it rather than appending to it. The
+// state is read before the typing test, which replaces the field.
+const currentCrumb =
+  window.document.querySelector('.breadcrumbs button[aria-current="page"]') ??
+  window.document.querySelector('.breadcrumbs button')
+currentCrumb?.click()
+await new Promise((resolve) => setTimeout(resolve, 60))
+const addressInput = window.document.querySelector('.files-address__input')
+const openedPath = addressInput?.value ?? null
+const focused = Boolean(addressInput) && window.document.activeElement === addressInput
+const allSelected = Boolean(addressInput)
+  ? addressInput.selectionStart === 0 &&
+    addressInput.selectionEnd === (addressInput.value ?? '').length
+  : false
+// Typing over the selection and pressing Enter is the whole point of the field,
+// so the check types a real path and looks for the folder it navigated to.
+let typedPath = false
+if (addressInput) {
+  const setValue = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    'value',
+  )?.set
+  setValue?.call(addressInput, '/media')
+  addressInput.dispatchEvent(new window.Event('input', { bubbles: true }))
+  addressInput.dispatchEvent(
+    new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+  )
+  await new Promise((resolve) => setTimeout(resolve, 700))
+  typedPath = [...window.document.querySelectorAll('.breadcrumbs button')].some(
+    (node) => node.textContent.trim() === 'media',
+  )
+}
+const addressBar = {
+  opens: Boolean(addressInput),
+  openedPath,
+  focused,
+  allSelected,
+  typedPath,
+}
 // Deletes are recoverable, so the pane that proves it has to open and list what
 // was deleted, with the folder each item came from and a way back.
 const trashText = await at('#/files?trash=1')
@@ -275,6 +315,7 @@ const summary = {
     settingsTabs,
     shareDialog,
     filesShares,
+    addressBar,
     dashboardShares,
     shareNotice,
     trashPane,
@@ -311,6 +352,9 @@ const broken =
   !summary.routes.shareDialog.showsAddress ||
   !summary.routes.shareDialog.offersName ||
   summary.routes.filesShares.live === 0 ||
+  !summary.routes.addressBar.opens ||
+  !summary.routes.addressBar.allSelected ||
+  !summary.routes.addressBar.typedPath ||
   !summary.routes.dashboardShares.card ||
   !summary.routes.dashboardShares.namesTheClient ||
   summary.routes.dashboardShares.live === 0 ||
