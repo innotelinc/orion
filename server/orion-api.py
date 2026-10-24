@@ -915,7 +915,10 @@ def render_smb_conf(spaces: list[dict]) -> str:
         "   workgroup = WORKGROUP",
         "   server string = Orion NAS",
         f"   netbios name = {NETBIOS_NAME}",
-        "   netbios aliases = nas",
+        # Aliases are what let a client mount the box by its mDNS name: Windows
+        # sends the whole \\host\share path at create time and smbd rejects it
+        # unless the host part is one of its own names.
+        f"   netbios aliases = nas {DISCOVERY_NAME}.local",
         "   server role = standalone server",
         "   map to guest = never",
         "   restrict anonymous = 2",
@@ -1527,10 +1530,29 @@ def guess_type(name: str) -> str:
     return mimetypes.guess_type(name)[0] or "application/octet-stream"
 
 
+def reconcile_installed_apps() -> None:
+    """A server that has an app installed should come up with it serving.
+
+    apt can leave smbd, nmbd or avahi stopped and disabled, and a rebuilt
+    container keeps the package while losing /etc/samba/smb.conf and the avahi
+    advert. Both are regenerated from what the registry says, so `installed`
+    means the same thing as `answering` after every boot.
+    """
+    steps = ((samba_installed, apply_smb_conf), (avahi_installed, apply_discovery))
+    for installed, apply in steps:
+        try:
+            if installed():
+                apply()
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            # A broken share is worth a journal line, never a failed start.
+            continue
+
+
 def main() -> None:
     META.mkdir(parents=True, exist_ok=True)
     TRASH.mkdir(parents=True, exist_ok=True)
     SAMPLER.start()
+    threading.Thread(target=reconcile_installed_apps, daemon=True, name="reconcile").start()
     server = ThreadingHTTPServer((BIND, PORT), Handler)
     print(f"orion-api listening on {BIND}:{PORT}, root {ROOT}", flush=True)
     server.serve_forever()
