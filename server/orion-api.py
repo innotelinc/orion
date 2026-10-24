@@ -849,8 +849,10 @@ def create_space(payload: dict, session: dict | None = None) -> dict:
         if password and email and directory_ready():
             signin = create_signin(slug, name, email, password)
         smb = bool(password)
-    except (ValueError, RuntimeError, LookupError):
-        # Nothing half-created: the folder and any Unix account it made go back.
+    except Exception:
+        # Nothing half-created, whatever went wrong: the folder and any Unix
+        # account it made go back. A bug in the directory client must not leave
+        # a person's folder behind with no account to match it.
         if password:
             try:
                 drop_samba_account(slug)
@@ -1047,8 +1049,10 @@ def directory_call(path: str, method: str = "GET", body: object = None) -> objec
         if error.code == 404:
             raise LookupError(f"the directory has no such record ({path})")
         raise ValueError(f"the directory refused that change: {detail}") from None
-    except (urllib.error.URLError, TimeoutError) as error:
-        raise RuntimeError(f"the directory is unreachable: {error.reason}") from None
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        # A timeout has no `.reason`; an HTTP wrapper does. Say something true
+        # either way instead of raising AttributeError out of an error path.
+        raise RuntimeError(f"the directory is unreachable: {getattr(error, 'reason', error)}") from None
 
 
 def directory_user(username: str) -> dict | None:

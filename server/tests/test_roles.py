@@ -259,6 +259,27 @@ class RoleTestCase(unittest.TestCase):
         self.assertFalse((self.root / "Users" / "doomed").exists())
         self.assertNotIn("doomed", [space["slug"] for space in self.api.load_spaces()])
 
+    def test_an_unexpected_directory_error_still_leaves_no_space_behind(self):
+        # The live failure this guards against was an AttributeError inside the
+        # client; it escaped the narrow handler and left a folder and a Unix
+        # account with no registry entry to match them.
+        self.api.directory_ready = lambda: True
+        self.api.create_signin = lambda *args, **kwargs: (_ for _ in ()).throw(
+            AttributeError("module 'urllib' has no attribute 'request'")
+        )
+        with self.assertRaises(AttributeError):
+            self.api.create_space(
+                {
+                    "name": "Half Made",
+                    "email": "half@example.test",
+                    "role": "Member",
+                    "password": "a-long-password",
+                },
+                self.admin,
+            )
+        self.assertFalse((self.root / "Users" / "half-made").exists())
+        self.assertNotIn("half-made", [space["slug"] for space in self.api.load_spaces()])
+
     def test_removing_a_person_ends_their_sign_in(self):
         disabled = []
         self.api.directory_ready = lambda: True
