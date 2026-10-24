@@ -1644,8 +1644,10 @@ def load_share_registry() -> dict:
     `shares` is what the dialog shows. `machines` is what makes a connection an
     event: it remembers the first sighting rather than the current session, so a
     mount that has been open for a week does not notify again every poll.
+    `labels` is what an admin called a machine, keyed by its address — the only
+    name available for a client Samba can only report an address for.
     """
-    empty = {"shares": {}, "machines": {}}
+    empty = {"shares": {}, "machines": {}, "labels": {}}
     try:
         payload = json.loads(SHARE_CLIENTS.read_text())
     except (OSError, ValueError):
@@ -1654,7 +1656,13 @@ def load_share_registry() -> dict:
         return empty
     shares = payload.get("shares")
     machines = payload.get("machines")
+    labels = payload.get("labels")
     return {
+        "labels": {
+            str(address): str(name).strip()
+            for address, name in (labels if isinstance(labels, dict) else {}).items()
+            if str(name or "").strip()
+        },
         "shares": {
             str(key): value
             for key, value in (shares if isinstance(shares, dict) else {}).items()
@@ -1717,6 +1725,7 @@ def share_client_map(spaces: list[dict], ttl: float = 5.0) -> dict[str, dict]:
     registry = load_share_registry()
     remembered = registry["shares"]
     first_seen = registry["machines"]
+    labels = registry["labels"]
     changed = False
     live: dict[str, list[dict]] = {}
     for session in parse_share_sessions(smb_status()):
@@ -1726,11 +1735,12 @@ def share_client_map(spaces: list[dict], ttl: float = 5.0) -> dict[str, dict]:
         address = session["machine"]
         # What to call it: Samba only ever reports addresses, and an IPv6
         # link-local address is not a name anyone recognises.
-        name = machine_name(address) if address else ""
+        name = machine_name(address, labels) if address else ""
         live.setdefault(slug, []).append(
             {
                 "machine": name or address,
                 "address": address,
+                "label": str(labels.get(address) or ""),
                 "since": session["since"],
             }
         )
@@ -1764,6 +1774,71 @@ def share_client_map(spaces: list[dict], ttl: float = 5.0) -> dict[str, dict]:
     }
     CLIENT_CACHE.update(key=key, at=now, value=value)
     return value
+
+
+# An address, as Samba reports it, plus the shape a label may be stored under:
+# the registry key comes from a request, so it is checked rather than trusted.
+CLIENT_ADDRESS = re.compile(r"^[A-Za-z0-9.:%_-]{1,64}$")
+CLIENT_LABEL_MAX = 40
+
+
+def can_label_client(address: str, session: dict) -> bool:
+    """Admins name the machines on the shares they run; a platform admin, any."""
+    permissions = session.get("permissions") or {}
+    if not permissions.get("manageUsers"):
+        return False
+    if permissions.get("scope") == "all":
+        return True
+    agency = str(permissions.get("agency") or "")
+    if not agency:
+        return False
+    spaces = load_spaces()
+    clients = share_client_map(spaces)
+    for space in spaces:
+        if str(space.get("agency") or "") != agency:
+            continue
+        seen = clients.get(str(space["slug"])) or {}
+        addresses = [client.get("address") for client in seen.get("clients") or []]
+        addresses.append((seen.get("lastClient") or {}).get("address"))
+        if address in addresses:
+            return True
+    return False
+
+
+def set_share_client_label(address: str, name: str, session: dict) -> dict:
+    """Remember what to call a client, or forget the name when it is empty.
+
+    Samba only ever reports an address, and the resolver cannot name a machine
+    that publishes nothing — an IPv6 client, typically. This is the escape
+    hatch: an admin says "that is the kitchen tablet" once and every row, dialog
+    and notice uses it from then on.
+    """
+    address = str(address or "").strip()
+    if not CLIENT_ADDRESS.match(address):
+        raise ValueError("invalid client address")
+    label = " ".join(str(name or "").split())
+    if len(label) > CLIENT_LABEL_MAX:
+        raise ValueError(f"use {CLIENT_LABEL_MAX} characters or fewer")
+    if not can_label_client(address, session):
+        raise PermissionError("only an admin can name a client")
+    registry = load_share_registry()
+    labels = registry["labels"]
+    if label:
+        labels[address] = label
+    else:
+        labels.pop(address, None)
+    # The last machine is a copy of its name, so it is rewritten here; otherwise
+    # a share with no session open would keep the old name until somebody
+    # connected again.
+    for record in registry["shares"].values():
+        if str(record.get("address") or "") == address:
+            record["machine"] = label or machine_name(address, labels) or address
+    save_share_registry(registry)
+    # The resolved name for this address may now be superseded, and the per-space
+    # map was built from the old registry; neither may serve the next read.
+    MACHINE_NAMES.pop(address, None)
+    CLIENT_CACHE.update(key=None, at=0.0, value={})
+    return {"address": address, "name": label or machine_name(address, labels) or address}
 
 
 MACHINE_NAMES: dict[str, tuple[float, str]] = {}
@@ -1843,7 +1918,19 @@ def resolver_name(address: str) -> str:
     return ""
 
 
-def machine_name(address: str) -> str:
+def client_label(address: str) -> str:
+    """The name an admin gave this address, or ''.
+
+    Asked per address rather than through machine_name because the answer is a
+    decision, not a lookup: it must not be aged out by the resolver's cache.
+    """
+    address = str(address or "").strip()
+    if not address:
+        return ""
+    return str(load_share_registry()["labels"].get(address) or "")
+
+
+def machine_name(address: str, labels: dict | None = None) -> str:
     """A name for a client's address, or '' when nothing here knows one.
 
     NetBIOS first, because that is the name Windows puts on the wire; then the
@@ -1855,6 +1942,13 @@ def machine_name(address: str) -> str:
     address = str(address or "").strip()
     if not address:
         return ""
+    # An admin's own name for the machine comes first: it was given because the
+    # lookup either cannot answer (an IPv6 client) or answers unhelpfully.
+    if labels is None:
+        labels = load_share_registry()["labels"]
+    chosen = str(labels.get(address) or "").strip()
+    if chosen:
+        return chosen
     cached = MACHINE_NAMES.get(address)
     now = time.monotonic()
     if cached is not None and now < cached[0]:
@@ -1896,6 +1990,7 @@ def share_notices(limit: int = 3) -> list[dict]:
     expires on its own after a day rather than being dismissed by hand.
     """
     registry = load_share_registry()
+    labels = registry["labels"]
     names = {str(space["slug"]): str(space.get("name") or space["slug"]) for space in load_spaces()}
     now = time.time()
     found: list[tuple[float, dict]] = []
@@ -1908,7 +2003,7 @@ def share_notices(limit: int = 3) -> list[dict]:
             age = now - first_seen
             if age < 0 or age > SHARE_NOTICE_WINDOW:
                 continue
-            name = machine_name(machine) or machine
+            name = machine_name(machine, labels) or machine
             handle = re.sub(r"[^a-z0-9]+", "-", machine.lower()).strip("-") or "client"
             found.append(
                 (
@@ -2841,6 +2936,14 @@ class Handler(BaseHTTPRequestHandler):
                 session = session_facts(self.identity())
                 space = set_space_role(slug, payload.get("role"), session)
                 self.json({"ok": True, "space": space})
+                return
+            if route == "/api/share-clients":
+                payload = self.body()
+                session = session_facts(self.identity())
+                named = set_share_client_label(
+                    str(payload.get("address") or ""), str(payload.get("name") or ""), session
+                )
+                self.json({"ok": True, **named})
                 return
             if route == "/api/apps":
                 payload = self.body()

@@ -84,6 +84,8 @@ export interface ShareClient {
   machine: string
   /** What Samba reported, so a name can always be traced to an address. */
   address?: string
+  /** The name an admin gave this machine; empty when it goes by its address. */
+  label?: string
   /** ISO timestamp; empty string when Samba did not say. */
   since: string
 }

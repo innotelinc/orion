@@ -171,10 +171,20 @@ const shareButton = window.document.querySelector('button[title^="Change the SMB
 shareButton?.click()
 await new Promise((resolve) => setTimeout(resolve, 400))
 const shareText = window.document.body.textContent.replace(/\s+/g, ' ')
+// Naming a machine is the way out of an address Samba cannot resolve, so the
+// control has to be reachable from the same dialog that reports the connection.
+const shareRows = window.document.querySelectorAll('.share-clients__row').length
+const renameButton = window.document.querySelector('.share-clients__row button')
+renameButton?.click()
+await new Promise((resolve) => setTimeout(resolve, 400))
+const nameInput = window.document.querySelector('.share-clients__form input')
 const shareDialog = {
   opened: Boolean(shareButton),
   namesTheClient: shareText.includes('DESKTOP-7Q4'),
   claimsConnected: /is connected/.test(shareText),
+  shareRows,
+  showsAddress: shareText.includes('192.168.1.20'),
+  offersName: Boolean(renameButton) && Boolean(nameInput),
 }
 await at('#/')
 
@@ -250,6 +260,9 @@ const broken =
   Object.values(summary.routes.settingsTabs).some((tab) => tab.crashed || tab.chars < 200) ||
   !summary.routes.shareDialog.namesTheClient ||
   !summary.routes.shareDialog.claimsConnected ||
+  summary.routes.shareDialog.shareRows === 0 ||
+  !summary.routes.shareDialog.showsAddress ||
+  !summary.routes.shareDialog.offersName ||
   summary.routes.filesShares.live === 0 ||
   !summary.routes.dashboardShares.card ||
   !summary.routes.dashboardShares.namesTheClient ||

@@ -134,6 +134,18 @@ to the machine that made it. IPv6 clients usually show their address: NetBIOS is
 IPv4-only, and the container has no mDNS NSS module, so `getent` has nothing to
 ask.
 
+Which is why the name can also be given by a person. An admin opening Settings →
+Users → **SMB** sees every machine on that share — live, or the last one
+remembered — under *Machines on this share*, and **Name it** stores a label
+(`POST /api/share-clients` with `{address, name}`) that wins over anything the
+host resolves. It is a label, not an identity: the address stays underneath, the
+session, the credentials and the mount are untouched, and searching the registry
+by the name Samba reported still finds it. **Use the address** (an empty name)
+forgets the label. Names are capped at 40 characters and addresses must look like
+one, because both end up in a JSON key and in a notification title. The rule is
+the same one that governs people: a platform admin may name any machine, and an
+agency admin only one connected to a share filed under its agency.
+
 A machine arriving for the first time on a share is also an event: the registry
 keeps the first sighting per machine per share, and a sighting inside the last
 day becomes a notification — *DESKTOP-7Q4 connected to Household* in the bell and

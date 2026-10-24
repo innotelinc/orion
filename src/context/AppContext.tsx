@@ -92,6 +92,7 @@ interface AppContextValue {
   }) => Promise<ActionResult>
   removeSpace: (id: string) => Promise<ActionResult>
   setSpacePassword: (id: string, password: string) => Promise<ActionResult>
+  nameShareClient: (address: string, name: string) => Promise<ActionResult>
   setSpaceRole: (id: string, role: UserRole) => Promise<ActionResult>
   removeShare: (id: string) => Promise<ActionResult>
   createMySpace: (password: string) => Promise<ActionResult>
@@ -569,6 +570,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [loadState, pushToast],
   )
 
+  const nameShareClient = useCallback(
+    async (address: string, name: string): Promise<ActionResult> => {
+      try {
+        const result = await api.nameShareClient(address, name)
+        await loadState()
+        pushToast({
+          title: name.trim() ? `Called “${result.name}” from now on` : `Back to ${result.name}`,
+          description: 'Every share row, dialog and notice uses that name.',
+          tone: 'success',
+        })
+        return { ok: true }
+      } catch (failure) {
+        return {
+          ok: false,
+          error: failure instanceof Error ? failure.message : 'The host refused that name.',
+        }
+      }
+    },
+    [loadState, pushToast],
+  )
+
   const installApp = useCallback(
     async (id: string): Promise<ActionResult> => {
       try {
@@ -664,6 +686,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addSpace,
       removeSpace,
       setSpacePassword,
+      nameShareClient,
       setSpaceRole,
       removeShare,
       createMySpace,
@@ -697,6 +720,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addSpace,
       removeSpace,
       setSpacePassword,
+      nameShareClient,
       setSpaceRole,
       removeShare,
       createMySpace,

@@ -134,6 +134,10 @@ export const api = {
     ),
   setSpaceRole: (id: string, role: UserRole) =>
     post<{ ok: true; space: Space }>(`/api/users/${encodeURIComponent(id)}/role`, { role }),
+  // What to call a machine Samba can only report an address for. An empty name
+  // forgets the label and goes back to the address.
+  nameShareClient: (address: string, name: string) =>
+    post<{ ok: true; address: string; name: string }>('/api/share-clients', { address, name }),
   removeShare: (id: string) =>
     request<{ ok: true; space: Space }>(`/api/users/${encodeURIComponent(id)}/share`, {
       method: 'DELETE',

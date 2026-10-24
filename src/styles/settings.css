@@ -756,6 +756,80 @@
   line-height: 1.45;
   color: var(--text-dim);
 }
+/* One row per machine on the share, with the name an admin may give it. */
+.share-clients {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 8px;
+  border-radius: 7px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.share-clients__title {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.share-clients__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 5px 4px;
+  border-radius: 6px;
+}
+.share-clients__row + .share-clients__row {
+  border-top: 1px solid var(--border);
+}
+.share-clients__who {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+.share-clients__name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-clients__meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  font-size: 9.5px;
+  color: var(--text-dim);
+}
+.share-clients__meta code {
+  font-size: 9.5px;
+  color: var(--text-muted);
+}
+.share-clients__actions,
+.share-clients__form {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.share-clients__form .input {
+  height: 26px;
+  padding: 0 7px;
+  font-size: 10.5px;
+  min-width: 140px;
+}
+.share-clients__hint {
+  font-size: 9.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
 .user-row__locked {
   display: inline-flex;
   align-items: center;

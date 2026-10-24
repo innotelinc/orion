@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   Check,
   Copy,
@@ -12,6 +12,7 @@ import {
   Moon,
   Network,
   Palette,
+  Pencil,
   RefreshCw,
   ShieldCheck,
   SlidersHorizontal,
@@ -24,6 +25,7 @@ import {
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { classNames, formatBytes, relativeTime } from '../lib/format'
+import { shareMachines } from '../lib/shares'
 import { signOut } from '../lib/session'
 import { Avatar } from '../components/ui/Avatar'
 import { Modal } from '../components/ui/Modal'
@@ -130,6 +132,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
     createMySpace,
     changeMyPassword,
     setSpacePassword,
+    nameShareClient,
     setSpaceRole,
     pushToast,
     storage,
@@ -161,6 +164,9 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
   const [passwordTarget, setPasswordTarget] = useState<Space | null>(null)
   const [passwordValue, setPasswordValue] = useState('')
   const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [namingClient, setNamingClient] = useState<string | null>(null)
+  const [clientName, setClientName] = useState('')
+  const [clientError, setClientError] = useState<string | null>(null)
   const smbApp = apps.find((app) => app.id === 'smb')
   // Declared before the rows below read it: a const used inside a callback
   // further up the body is a temporal-dead-zone crash at render, not a type error.
@@ -180,6 +186,38 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
   const roleChoices: UserRole[] = platformWide
     ? ['Agency admin', 'Member', 'Guest']
     : ['Member', 'Guest']
+
+  // The dialog holds the space it was opened with. A rename comes back through
+  // /api/state, so the dialog follows the fresh copy instead of showing the name
+  // the machine had when it was opened.
+  useEffect(() => {
+    if (!passwordTarget) return
+    const fresh = spaces.find((space) => space.slug === passwordTarget.slug)
+    if (fresh && fresh !== passwordTarget) setPasswordTarget(fresh)
+  }, [passwordTarget, spaces])
+
+  const machines = passwordTarget ? shareMachines(passwordTarget) : []
+
+  const submitClientName = async (address: string) => {
+    setClientError(null)
+    setSpaceBusy(true)
+    const result = await nameShareClient(address, clientName)
+    setSpaceBusy(false)
+    if (!result.ok) {
+      setClientError(result.error ?? 'The host refused that name.')
+      return
+    }
+    setNamingClient(null)
+    setClientName('')
+  }
+
+  const clearClientName = async (address: string) => {
+    setClientError(null)
+    setSpaceBusy(true)
+    const result = await nameShareClient(address, '')
+    setSpaceBusy(false)
+    if (!result.ok) setClientError(result.error ?? 'The host refused that.')
+  }
 
   const submitPassword = async () => {
     if (!passwordTarget) return
@@ -1474,6 +1512,102 @@ systemctl reload nginx`}
                     : 'It appears here within a few seconds of a client mounting it — reload this page after trying the path above.'}
               </span>
             </div>
+          </div>
+        ) : null}
+        {passwordTarget?.smb && machines.length ? (
+          // Samba reports an address and nothing more, and a machine that
+          // publishes no name never gets one — an IPv6 client, typically. This
+          // is where an admin says what it is, once.
+          <div className="share-clients">
+            <span className="share-clients__title">Machines on this share</span>
+            {machines.map((machine) => (
+              <div className="share-clients__row" key={machine.address}>
+                <span className="share-clients__who">
+                  <strong className="share-clients__name">{machine.machine}</strong>
+                  <span className="share-clients__meta">
+                    <code>{machine.address}</code>
+                    <span aria-hidden="true">·</span>
+                    {machine.live ? 'connected now' : `last connected ${relativeTime(machine.since)}`}
+                    {machine.label ? (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        named by you
+                      </>
+                    ) : null}
+                  </span>
+                </span>
+                {namingClient === machine.address ? (
+                  <span className="share-clients__form">
+                    <input
+                      className="input"
+                      aria-label={`The name for ${machine.machine}`}
+                      placeholder="Kitchen tablet"
+                      maxLength={40}
+                      value={clientName}
+                      autoFocus
+                      onChange={(event) => {
+                        setClientName(event.target.value)
+                        setClientError(null)
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') void submitClientName(machine.address)
+                        if (event.key === 'Escape') setNamingClient(null)
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="button button--primary button--sm"
+                      disabled={spaceBusy || !clientName.trim()}
+                      onClick={() => void submitClientName(machine.address)}
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      className="button button--sm"
+                      onClick={() => setNamingClient(null)}
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <span className="share-clients__actions">
+                    <button
+                      type="button"
+                      className="button button--ghost button--sm"
+                      onClick={() => {
+                        setNamingClient(machine.address)
+                        setClientName(machine.label ?? '')
+                        setClientError(null)
+                      }}
+                    >
+                      <Pencil size={12} aria-hidden="true" />
+                      {machine.label ? 'Rename' : 'Name it'}
+                    </button>
+                    {machine.label ? (
+                      <button
+                        type="button"
+                        className="button button--ghost button--sm"
+                        title="Forget the name and show the address Samba reports"
+                        onClick={() => void clearClientName(machine.address)}
+                      >
+                        Use the address
+                      </button>
+                    ) : null}
+                  </span>
+                )}
+              </div>
+            ))}
+            {clientError ? (
+              <span className="field__error" role="alert">
+                {clientError}
+              </span>
+            ) : (
+              <span className="share-clients__hint">
+                The name is only a label: the address stays underneath, and nothing about the
+                connection changes.
+              </span>
+            )}
           </div>
         ) : null}
         <div className="field">

@@ -104,8 +104,20 @@
       "color": "#0a63ff",
       "smb": true,
       "manageable": true,
-      "clients": [{ "machine": "DESKTOP-7Q4", "address": "192.168.1.20", "since": "2026-01-01T00:00:00Z" }],
-      "lastClient": { "machine": "DESKTOP-7Q4", "address": "192.168.1.20", "since": "2026-01-01T00:00:00Z" }
+      "clients": [
+        {
+          "machine": "DESKTOP-7Q4",
+          "address": "192.168.1.20",
+          "label": "",
+          "since": "2026-01-01T00:00:00Z"
+        }
+      ],
+      "lastClient": {
+        "machine": "DESKTOP-7Q4",
+        "address": "192.168.1.20",
+        "label": "",
+        "since": "2026-01-01T00:00:00Z"
+      }
     }
   ],
   "apps": [

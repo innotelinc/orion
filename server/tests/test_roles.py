@@ -439,8 +439,10 @@ class ShareClientTestCase(unittest.TestCase):
         self.api.save_spaces(spaces)
         self.api.samba_installed = lambda: True
         # Name resolution shells out to nmblookup and getent; a unit test has
-        # neither, and nothing here is about the lookup itself.
-        self.api.machine_name = lambda address: ""
+        # neither, so the runner they go through answers nothing. The lookup
+        # itself is exercised in MachineNameTestCase.
+        self.api.run_root = lambda *args, **kwargs: ""
+        self.api.MACHINE_NAMES.clear()
         # create_space already asked for the share facts (with no Samba, so
         # nothing), and that answer is cached for a few seconds.
         self.api.CLIENT_CACHE.update({"key": None, "at": 0.0, "value": {}})
@@ -528,7 +530,9 @@ class ShareClientTestCase(unittest.TestCase):
         self.assertIsNone(facts["lastClient"])
 
     def test_a_client_is_called_by_its_name_and_keeps_its_address(self):
-        self.api.machine_name = lambda address: "DESKTOP-7Q4" if address == "192.168.1.20" else ""
+        self.api.machine_name = lambda address, labels=None: (
+            "DESKTOP-7Q4" if address == "192.168.1.20" else ""
+        )
         self.api.smb_status = lambda: {
             "tcons": {
                 "1": {"service": "Ada Lovelace", "machine": "192.168.1.20", "connected_at": "2026-10-24T09:15:00"}
@@ -549,7 +553,9 @@ class ShareClientTestCase(unittest.TestCase):
         self.assertEqual(facts["clients"][0]["machine"], "fe80::3309:3fb0")
 
     def test_the_notice_uses_the_name_and_quotes_the_address(self):
-        self.api.machine_name = lambda address: "DESKTOP-7Q4" if address == "192.168.1.20" else ""
+        self.api.machine_name = lambda address, labels=None: (
+            "DESKTOP-7Q4" if address == "192.168.1.20" else ""
+        )
         self.api.smb_status = lambda: {
             "tcons": {
                 "1": {"service": "Ada Lovelace", "machine": "192.168.1.20", "connected_at": "2026-10-24T09:15:00"}
@@ -614,6 +620,115 @@ class ShareClientTestCase(unittest.TestCase):
         saved = json.loads(stored.read_text())
         self.assertEqual(saved["shares"], {})
         self.assertEqual(saved["machines"], {})
+
+    # -- naming a client --------------------------------------------------
+
+    def _connected(self, machine="fe80::3309:3fb0:b346:87d6"):
+        self.api.smb_status = lambda: {
+            "tcons": {
+                "1": {
+                    "service": "Ada Lovelace",
+                    "machine": machine,
+                    "connected_at": "2026-10-24T09:15:00",
+                }
+            }
+        }
+
+    def test_an_admin_can_name_a_client_the_resolver_cannot(self):
+        self._connected()
+        facts = self.api.space_facts(self.api.load_spaces()[0], 0, self.admin)
+        self.assertEqual(facts["clients"][0]["machine"], "fe80::3309:3fb0:b346:87d6")
+        named = self.api.set_share_client_label(
+            "fe80::3309:3fb0:b346:87d6", "  Kitchen   tablet ", self.admin
+        )
+        self.assertEqual(named["name"], "Kitchen tablet")
+        self.api.CLIENT_CACHE.update({"key": None, "at": 0.0, "value": {}})
+        facts = self.api.space_facts(self.api.load_spaces()[0], 0, self.admin)
+        self.assertEqual(facts["clients"][0]["machine"], "Kitchen tablet")
+        # The address stays with it: a name that cannot be traced is no better
+        # than the address it replaced.
+        self.assertEqual(facts["clients"][0]["address"], "fe80::3309:3fb0:b346:87d6")
+        self.assertEqual(facts["clients"][0]["label"], "Kitchen tablet")
+
+    def test_the_name_is_on_the_notice_too(self):
+        self._connected()
+        self.api.set_share_client_label("fe80::3309:3fb0:b346:87d6", "Kitchen tablet", self.admin)
+        self.api.share_client_map(self.api.load_spaces(), ttl=0)
+        notice = self.api.share_notices()[0]
+        self.assertEqual(notice["title"], "Kitchen tablet connected to Ada Lovelace")
+        self.assertIn("fe80::3309:3fb0:b346:87d6", notice["body"])
+
+    def test_a_name_survives_a_closed_session(self):
+        self._connected("192.168.1.20")
+        # Read once while the session is open, so the machine is remembered.
+        self.api.space_facts(self.api.load_spaces()[0], 0, self.admin)
+        self.api.set_share_client_label("192.168.1.20", "Studio PC", self.admin)
+        self.api.smb_status = lambda: {}
+        self.api.CLIENT_CACHE.update({"key": None, "at": 0.0, "value": {}})
+        facts = self.api.space_facts(self.api.load_spaces()[0], 0, self.admin)
+        self.assertEqual(facts["clients"], [])
+        self.assertEqual(facts["lastClient"]["machine"], "Studio PC")
+        stored = json.loads((self.root / ".orion" / "share-clients.json").read_text())
+        self.assertEqual(stored["labels"]["192.168.1.20"], "Studio PC")
+
+    def test_clearing_the_name_goes_back_to_the_address(self):
+        self._connected()
+        self.api.set_share_client_label("fe80::3309:3fb0:b346:87d6", "Kitchen tablet", self.admin)
+        cleared = self.api.set_share_client_label("fe80::3309:3fb0:b346:87d6", "", self.admin)
+        self.assertEqual(cleared["name"], "fe80::3309:3fb0:b346:87d6")
+        self.api.CLIENT_CACHE.update({"key": None, "at": 0.0, "value": {}})
+        facts = self.api.space_facts(self.api.load_spaces()[0], 0, self.admin)
+        self.assertEqual(facts["clients"][0]["machine"], "fe80::3309:3fb0:b346:87d6")
+        self.assertEqual(facts["clients"][0]["label"], "")
+        stored = json.loads((self.root / ".orion" / "share-clients.json").read_text())
+        self.assertEqual(stored["labels"], {})
+
+    def test_a_member_cannot_name_a_client(self):
+        self._connected()
+        member = self.api.session_facts(identity("ada@example.test"))
+        with self.assertRaises(PermissionError):
+            self.api.set_share_client_label("fe80::3309:3fb0:b346:87d6", "Mine now", member)
+        self.assertEqual(self.api.load_share_registry()["labels"], {})
+
+    def test_an_agency_admin_names_only_machines_on_its_own_shares(self):
+        self._connected("192.168.1.20")
+        agency = self.api.create_space(
+            {"name": "Agency Lady", "email": "agency@example.test", "role": "Agency admin"},
+            self.admin,
+        )
+        session = self.api.session_facts(identity("agency@example.test"))
+        # This client is on Ada's share, which is filed under nobody.
+        with self.assertRaises(PermissionError):
+            self.api.set_share_client_label("192.168.1.20", "Not mine", session)
+        person = self.api.create_space(
+            {"name": "Filed Person", "email": "filed@example.test", "role": "Member", "agency": agency["slug"]},
+            session,
+        )
+        spaces = self.api.load_spaces()
+        for space in spaces:
+            space["smb"] = True
+        self.api.save_spaces(spaces)
+        self.api.smb_status = lambda: {
+            "tcons": {
+                "1": {"service": person["name"], "machine": "192.168.1.30", "connected_at": "2026-10-24T09:15:00"}
+            }
+        }
+        self.api.CLIENT_CACHE.update({"key": None, "at": 0.0, "value": {}})
+        self.assertEqual(
+            self.api.set_share_client_label("192.168.1.30", "Reception", session)["name"],
+            "Reception",
+        )
+
+    def test_an_address_that_could_not_be_one_is_refused(self):
+        self._connected()
+        for address in ("", "../etc/passwd", "x" * 65):
+            with self.assertRaises(ValueError):
+                self.api.set_share_client_label(address, "Kitchen tablet", self.admin)
+
+    def test_a_name_that_is_too_long_is_refused(self):
+        self._connected()
+        with self.assertRaises(ValueError):
+            self.api.set_share_client_label("192.168.1.20", "x" * 41, self.admin)
 
     def test_unsharing_forgets_their_machine(self):
         self.api.smb_status = lambda: {
@@ -694,6 +809,15 @@ class MachineNameTestCase(unittest.TestCase):
             "192.168.1.20\tdesktop-7q4.local\n" if "getent" in script else ""
         )
         self.assertEqual(self.api.machine_name("192.168.1.20"), "desktop-7q4.local")
+
+    def test_an_admins_name_is_used_before_anything_is_looked_up(self):
+        asked = []
+        self.api.run_root = lambda script, **kwargs: asked.append(script) or ""
+        self.api.save_share_registry(
+            {"shares": {}, "machines": {}, "labels": {"fe80::1": "Kitchen tablet"}}
+        )
+        self.assertEqual(self.api.machine_name("fe80::1"), "Kitchen tablet")
+        self.assertEqual(asked, [])
 
     def test_a_lookup_is_remembered(self):
         calls = []
