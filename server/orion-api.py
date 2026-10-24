@@ -523,38 +523,14 @@ def storage_facts() -> dict:
 
 
 def users_facts(identity: dict | None) -> list[dict]:
-    palette = ["#0a63ff", "#8b5cf6", "#10b981", "#f59e0b", "#f43f5e", "#06b6d4"]
+    """The people this app knows: the signed-in person, and the spaces an admin
+    issued. The container's own Unix accounts are not app users — root and
+    ubuntu are plumbing, and listing them made the desktop look like it had
+    signed in as root.
+    """
     users = []
-    for line in read_text("/etc/passwd").splitlines():
-        fields = line.split(":")
-        if len(fields) < 7:
-            continue
-        name, _, uid, gid, gecos, home, shell = fields[:7]
-        try:
-            uid_value = int(uid)
-        except ValueError:
-            continue
-        if uid_value != 0 and uid_value < 1000:
-            continue
-        if shell.endswith(("nologin", "false")):
-            continue
-        display = gecos.split(",")[0] or name
-        users.append(
-            {
-                "id": f"u-{uid_value}",
-                "name": display,
-                "email": f"{name}@{socket.gethostname()}",
-                "role": "Owner" if uid_value == 0 else "Member",
-                "lastActive": "Never",
-                "color": palette[uid_value % len(palette)],
-                "isCurrent": False,
-                "account": name,
-                "home": home,
-            }
-        )
     if identity and identity.get("email"):
-        users.insert(
-            0,
+        users.append(
             {
                 "id": "sso",
                 "name": identity.get("name") or identity["email"].split("@")[0],
@@ -565,7 +541,23 @@ def users_facts(identity: dict | None) -> list[dict]:
                 "isCurrent": True,
                 "account": identity.get("username") or "",
                 "home": "",
-            },
+                "source": "authentik",
+            }
+        )
+    for index, space in enumerate(load_spaces()):
+        users.append(
+            {
+                "id": f"space-{space['slug']}",
+                "name": str(space.get("name") or space["slug"]),
+                "email": str(space.get("email") or f"{space['slug']}@nas"),
+                "role": str(space.get("role") or "Member"),
+                "lastActive": "Space · admin issued",
+                "color": str(space.get("color") or SPACE_PALETTE[index % len(SPACE_PALETTE)]),
+                "isCurrent": False,
+                "account": str(space["slug"]),
+                "home": f"/{USERS_DIR_NAME}/{space['slug']}",
+                "source": "space",
+            }
         )
     return users
 
@@ -1149,6 +1141,294 @@ def services_facts() -> list[dict]:
     return services
 
 
+HEALTH_PAGE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orion NAS · status</title>
+<style>
+  :root {
+    --bg: #07080c; --surface: #0d1016; --line: #1b2030;
+    --text: #e8ecf5; --muted: #8b93a7; --accent: #0a63ff;
+    --ok: #22c55e; --warn: #f59e0b; --bad: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 40px 24px; background: var(--bg); color: var(--text);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 880px; margin: 0 auto; }
+  .top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .mark {
+    width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center;
+    background: linear-gradient(150deg, #12327d, #0a63ff); font-weight: 700; letter-spacing: .02em;
+  }
+  h1 { font-size: 19px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: 12.5px; }
+  .pill {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
+    padding: 8px 14px; border-radius: 999px; font-size: 13px; font-weight: 600;
+    border: 1px solid var(--line); background: var(--surface);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .pill.ok { color: #b9f6ce; border-color: #14532d; background: #08210f; }
+  .pill.ok .dot { background: var(--ok); box-shadow: 0 0 0 4px rgba(34,197,94,.16); animation: pulse 2.4s ease-in-out infinite; }
+  .pill.bad { color: #fecaca; border-color: #7f1d1d; background: #240b0b; }
+  .pill.bad .dot { background: var(--bad); box-shadow: 0 0 0 4px rgba(239,68,68,.16); }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 7px rgba(34,197,94,.05); } }
+  .meta { display: flex; gap: 18px; flex-wrap: wrap; margin: 18px 0 26px; color: var(--muted); font-size: 12.5px; }
+  .meta b { color: var(--text); font-weight: 600; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+    padding: 16px 18px; min-width: 0;
+  }
+  .card h2 { margin: 0 0 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 650; }
+  .value { font-size: 27px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .value small { font-size: 13px; color: var(--muted); font-weight: 500; margin-left: 4px; }
+  .spark { display: block; width: 100%; height: 38px; margin-top: 10px; }
+  .spark polyline { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .spark .area { fill: rgba(10, 99, 255, .16); stroke: none; }
+  section.block { margin-top: 14px; }
+  ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  li { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
+  li .dot { flex: none; }
+  li .name { font-weight: 600; min-width: 78px; }
+  li .why { color: var(--muted); font-size: 12.5px; }
+  li .state { margin-left: auto; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+  .bar { height: 7px; border-radius: 999px; background: #161b26; overflow: hidden; margin-top: 9px; }
+  .bar span { display: block; height: 100%; background: linear-gradient(90deg, #1d7bff, #6ea8ff); }
+  .pool { display: grid; gap: 4px; }
+  .pool .row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+  .pool .row span:last-child { color: var(--muted); font-variant-numeric: tabular-nums; }
+  footer { margin-top: 26px; color: var(--muted); font-size: 12.5px; display: flex; gap: 12px; flex-wrap: wrap; }
+  footer a { color: #9dc0ff; text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+  @media (prefers-reduced-motion: reduce) { .pill.ok .dot { animation: none; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <span class="mark" aria-hidden="true">O</span>
+    <div>
+      <h1>Orion NAS</h1>
+      <div class="sub" id="host">reading this machine…</div>
+    </div>
+    <span class="pill" id="status" role="status"><span class="dot"></span><span id="status-text">checking</span></span>
+  </div>
+
+  <div class="meta">
+    <span>build <b id="version">—</b></span>
+    <span>up <b id="uptime">—</b></span>
+    <span>checked <b id="checked">—</b></span>
+  </div>
+
+  <div class="grid">
+    <article class="card">
+      <h2>CPU</h2>
+      <div class="value"><span id="cpu">—</span><small>%</small></div>
+      <svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true">
+        <polygon class="area" id="cpu-area" points="" />
+        <polyline id="cpu-line" points="" />
+      </svg>
+    </article>
+    <article class="card">
+      <h2>Memory</h2>
+      <div class="value"><span id="ram">—</span><small>%</small></div>
+      <svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true">
+        <polygon class="area" id="ram-area" points="" />
+        <polyline id="ram-line" points="" />
+      </svg>
+    </article>
+    <article class="card">
+      <h2>Network</h2>
+      <div class="value"><span id="net">—</span><small id="net-unit">B/s</small></div>
+      <div class="sub" style="margin-top:6px"><span id="net-detail">down — · up —</span></div>
+    </article>
+  </div>
+
+  <section class="block card">
+    <h2>Services</h2>
+    <ul id="checks"></ul>
+  </section>
+
+  <section class="block card">
+    <h2>Storage</h2>
+    <ul id="storage"></ul>
+  </section>
+
+  <footer>
+    <span>Refreshes every 5 seconds.</span>
+    <a href="/app/">Open the desktop</a>
+  </footer>
+</main>
+
+<script>
+const data = __DATA__;
+
+const el = (id) => document.getElementById(id);
+
+function uptime(seconds) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  if (days) return days + 'd ' + hours + 'h';
+  if (hours) return hours + 'h ' + minutes + 'm';
+  return minutes + 'm ' + (s % 60) + 's';
+}
+
+function rate(bytes) {
+  const value = Math.max(0, bytes || 0);
+  if (value > 1048576) return [ (value / 1048576).toFixed(1), 'MB/s' ];
+  if (value > 1024) return [ (value / 1024).toFixed(1), 'KB/s' ];
+  return [ value.toFixed(0), 'B/s' ];
+}
+
+function spark(lineId, areaId, history) {
+  const values = (history || []).slice(-60);
+  const line = el(lineId);
+  const area = el(areaId);
+  if (!line) return;
+  if (values.length < 2) { line.setAttribute('points', ''); if (area) area.setAttribute('points', ''); return; }
+  const points = values.map((value, index) => {
+    const x = (index / (values.length - 1)) * 100;
+    const y = 30 - (Math.max(0, Math.min(100, value)) / 100) * 28 - 1;
+    return x.toFixed(2) + ',' + y.toFixed(2);
+  });
+  line.setAttribute('points', points.join(' '));
+  if (area) area.setAttribute('points', '0,30 ' + points.join(' ') + ' 100,30');
+}
+
+function render(facts) {
+  const ok = facts.status === 'operational';
+  const pill = el('status');
+  pill.className = 'pill ' + (ok ? 'ok' : 'bad');
+  el('status-text').textContent = ok ? 'Operational' : 'Degraded';
+  el('host').textContent = (facts.hostname || 'this host') + ' · ' + (facts.runtime || '');
+  el('version').textContent = (facts.version && (facts.version.version + ' · ' + facts.version.build)) || 'dev';
+  el('uptime').textContent = uptime(facts.uptimeSeconds);
+  el('checked').textContent = new Date(facts.checkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+  const metrics = facts.metrics || {};
+  el('cpu').textContent = metrics.cpu ?? '—';
+  el('ram').textContent = metrics.ram ?? '—';
+  const [down, downUnit] = rate(metrics.netDown);
+  el('net').textContent = down;
+  el('net-unit').textContent = downUnit;
+  const [up, upUnit] = rate(metrics.netUp);
+  el('net-detail').textContent = 'down ' + down + ' ' + downUnit + ' · up ' + up + ' ' + upUnit;
+  spark('cpu-line', 'cpu-area', metrics.cpuHistory);
+  spark('ram-line', 'ram-area', metrics.ramHistory);
+
+  el('checks').innerHTML = (facts.checks || []).map((check) => {
+    const color = !check.installed ? 'var(--muted)' : (check.ok ? 'var(--ok)' : 'var(--bad)');
+    return '<li><span class="dot" style="background:' + color + '"></span>' +
+      '<span class="name">' + check.label + '</span>' +
+      '<span class="why">' + check.purpose + '</span>' +
+      '<span class="state">' + check.state + '</span></li>';
+  }).join('');
+
+  const pools = (facts.storage && facts.storage.pools) || [];
+  el('storage').innerHTML = pools.map((pool) => {
+    const used = pool.usedBytes || 0;
+    const total = pool.totalBytes || 1;
+    const percent = Math.min(100, Math.round((used / total) * 100));
+    return '<li style="display:block">' +
+      '<div class="pool"><div class="row"><span><b>' + pool.name + '</b> <span class="dim">' + pool.source + '</span></span>' +
+      '<span>' + percent + '% of ' + fmt(total) + '</span></div>' +
+      '<div class="bar"><span style="width:' + percent + '%"></span></div></div></li>';
+  }).join('') || '<li><span class="why">No pools reported.</span></li>';
+}
+
+function fmt(bytes) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes, index = 0;
+  while (value >= 1024 && index < units.length - 1) { value /= 1024; index += 1; }
+  return value.toFixed(value >= 10 || index === 0 ? 0 : 1) + ' ' + units[index];
+}
+
+render(data);
+setInterval(async () => {
+  try {
+    const response = await fetch('/api/health', { cache: 'no-store' });
+    render(await response.json());
+  } catch (error) {
+    el('status').className = 'pill bad';
+    el('status-text').textContent = 'API unreachable';
+  }
+}, 5000);
+</script>
+</body>
+</html>
+"""
+
+
+HEALTH_UNITS = (
+    ("orion-api.service", "API", "the JSON surface this page is drawn from"),
+    ("nginx.service", "nginx", "serves the desktop and proxies the API"),
+    ("smbd.service", "SMB", "the share every space is mounted from"),
+    ("nmbd.service", "NetBIOS", "answers to ORION-NAS on the LAN"),
+    ("avahi-daemon.service", "mDNS", "publishes orion-nas.local"),
+)
+HEALTH_PACKAGES = {
+    "smbd.service": "samba",
+    "nmbd.service": "samba",
+    "avahi-daemon.service": "avahi-daemon",
+    "nginx.service": "nginx",
+}
+HEALTH_CORE = {"orion-api.service", "nginx.service"}
+
+
+def health_facts() -> dict:
+    """What is true right now, shaped for a status page and a probe alike."""
+    storage = storage_facts()
+    metrics = SAMPLER.snapshot()
+    checks = []
+    degraded = False
+    for unit, label, purpose in HEALTH_UNITS:
+        package = HEALTH_PACKAGES.get(unit)
+        installed = True if package is None else dpkg_installed(package)
+        if not installed:
+            checks.append(
+                {"id": unit, "label": label, "purpose": purpose, "installed": False,
+                 "state": "not installed", "ok": True}
+            )
+            continue
+        ok, state = unit_state(unit)
+        if not ok and unit in HEALTH_CORE:
+            degraded = True
+        checks.append(
+            {"id": unit, "label": label, "purpose": purpose, "installed": True,
+             "state": state, "ok": ok}
+        )
+    pools = storage.get("pools") or []
+    storage_ok = bool(pools) and all(pool.get("totalBytes") for pool in pools)
+    if not storage_ok:
+        degraded = True
+    return {
+        "status": "degraded" if degraded else "operational",
+        "ok": not degraded,
+        "checkedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "hostname": socket.gethostname(),
+        "runtime": container_runtime(),
+        "version": version_facts(),
+        "uptimeSeconds": metrics["uptimeSeconds"],
+        "checks": checks,
+        "storage": storage,
+        "metrics": metrics,
+    }
+
+
+def render_health_page(facts: dict) -> str:
+    payload = json.dumps(facts).replace("</", "<\\/")
+    return (
+        HEALTH_PAGE.replace("__DATA__", payload)
+    )
+
+
 def notifications_facts(storage: dict, services: list[dict]) -> list[dict]:
     items = []
     for pool in storage["pools"]:
@@ -1309,6 +1589,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def page(self, body: str, status: int = 200) -> None:
+        payload = body.encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(payload)
+
     def fail(self, message: str, status: int = 400) -> None:
         self.json({"error": message}, status)
 
@@ -1320,10 +1609,18 @@ class Handler(BaseHTTPRequestHandler):
         ).strip()
         if not email:
             return None
+        username = (self.headers.get("X-Auth-Request-User") or "").strip()
+        preferred = (self.headers.get("X-Auth-Request-Preferred-Username") or "").strip()
+        # oauth2-proxy forwards the user name, not the display name, so the most
+        # readable thing the app can honestly show is the account title-cased:
+        # dhunter -> Dhunter, d.hunter -> D Hunter.
+        handle = preferred or username or email.split("@")[0]
+        words = [part for part in re.split(r"[._\-]+", handle) if part]
+        display = " ".join(word.capitalize() for word in words) or handle
         return {
             "email": email,
-            "name": self.headers.get("X-Auth-Request-Preferred-Username") or "",
-            "username": self.headers.get("X-Auth-Request-User") or "",
+            "name": display,
+            "username": username,
             "groups": [
                 value.strip()
                 for value in (self.headers.get("X-Auth-Request-Groups") or "").split(",")
@@ -1352,6 +1649,14 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlsplit(self.path)
         route = parsed.path.rstrip("/") or "/"
         try:
+            if route in ("/health", "/api/health"):
+                facts = health_facts()
+                status = HTTPStatus.OK if facts["ok"] else HTTPStatus.SERVICE_UNAVAILABLE
+                if route == "/health":
+                    self.page(render_health_page(facts), status)
+                else:
+                    self.json(facts, status)
+                return
             if route == "/api/metrics":
                 self.json(SAMPLER.snapshot())
                 return
