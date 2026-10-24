@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "name": "old-notes.txt",
+      "original": "/media/old-notes.txt",
+      "type": "file",
+      "size": 42,
+      "deletedAt": "2026-01-01T00:00:00Z"
+    },
+    {
+      "name": "backups-2",
+      "original": "/backups",
+      "type": "folder",
+      "size": 1024,
+      "deletedAt": "2026-01-02T00:00:00Z"
+    }
+  ],
+  "bytes": 1066
+}

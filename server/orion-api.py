@@ -42,6 +42,9 @@ ROOT = Path(os.environ.get("ORION_ROOT", "/srv/storage")).resolve()
 META = ROOT / ".orion"
 TRASH = META / "trash"
 STARS = META / "starred.json"
+# Where each item in the trash came from, so a restore puts it back rather than
+# dropping it at the root. The registry lives beside the trash, not inside it.
+TRASH_INDEX = META / "trash.json"
 SPACES = META / "spaces.json"
 USERS_DIR_NAME = "Users"
 # Administration is two levels. A platform admin owns the box and every
@@ -329,17 +332,141 @@ def upload_stream(
     }
 
 
+def load_trash_index() -> dict:
+    """The stored name of each trashed item, and the path it came from."""
+    try:
+        payload = json.loads(TRASH_INDEX.read_text())
+    except (OSError, ValueError):
+        return {}
+    entries = payload.get("entries") if isinstance(payload, dict) else None
+    return entries if isinstance(entries, dict) else {}
+
+
+def save_trash_index(entries: dict) -> None:
+    META.mkdir(parents=True, exist_ok=True)
+    temporary = TRASH_INDEX.with_name(TRASH_INDEX.name + ".tmp")
+    temporary.write_text(json.dumps({"entries": entries}, indent=2) + "\n")
+    temporary.replace(TRASH_INDEX)
+
+
 def move_to_trash(paths: list[str]) -> int:
+    """Move items aside, writing down where they came from first.
+
+    The path is recorded before the move because after it there is nothing left
+    to read it from, and a restore that cannot say where an item belongs is a
+    restore into the root folder — not what anybody pressed.
+    """
     TRASH.mkdir(parents=True, exist_ok=True)
+    index = load_trash_index()
     moved = 0
     for virtual in paths:
         target = safe_path(virtual)
         if target == ROOT or not target.exists():
             continue
         destination = unique_child(TRASH, target.name)
+        index[destination.name] = {
+            "original": virtual_path(target),
+            "deletedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "type": "folder" if target.is_dir() else "file",
+        }
         shutil.move(str(target), str(destination))
         moved += 1
+    save_trash_index(index)
     return moved
+
+
+def trash_entries() -> list[Path]:
+    if not TRASH.is_dir():
+        return []
+    try:
+        return list(TRASH.iterdir())
+    except OSError:
+        return []
+
+
+def trash_count() -> int:
+    return len(trash_entries())
+
+
+def trash_facts() -> dict:
+    """What is in the trash, where each item came from, and how big it is.
+
+    The registry is pruned on read, the same way the spaces registry is: an item
+    emptied by hand outside this app must stop appearing, and a record whose item
+    is gone must not keep a phantom row alive.
+    """
+    index = load_trash_index()
+    items = []
+    kept = {}
+    total = 0
+    for entry in trash_entries():
+        record = index.get(entry.name) or {}
+        try:
+            modified = entry.stat().st_mtime
+            size = folder_bytes(entry) if entry.is_dir() and not entry.is_symlink() else entry.stat().st_size
+        except OSError:
+            continue
+        kept[entry.name] = record
+        total += size
+        items.append(
+            {
+                "name": entry.name,
+                "original": str(record.get("original") or ""),
+                "type": "folder" if entry.is_dir() and not entry.is_symlink() else "file",
+                "size": size,
+                "deletedAt": str(
+                    record.get("deletedAt")
+                    or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(modified))
+                ),
+            }
+        )
+    if kept != index:
+        try:
+            save_trash_index(kept)
+        except OSError:
+            pass
+    items.sort(key=lambda item: item["deletedAt"], reverse=True)
+    return {"items": items, "bytes": total}
+
+
+def restore_from_trash(name: str) -> dict:
+    """Put one item back where it was deleted from."""
+    name = str(name or "").strip()
+    if not name or "/" in name or name in (".", ".."):
+        raise ValueError("unknown trash item")
+    source = TRASH / name
+    if not source.exists():
+        raise LookupError("that item is no longer in Trash")
+    index = load_trash_index()
+    record = index.get(name) or {}
+    original = str(record.get("original") or "").strip()
+    destination = safe_path(original) if original else ROOT / name
+    parent = destination.parent
+    if parent == TRASH or not parent.is_dir():
+        raise ValueError("the folder it came from is gone, so it cannot go back")
+    if destination.exists():
+        # Something new lives there now; keep both rather than overwrite it.
+        destination = unique_child(parent, destination.name)
+    shutil.move(str(source), str(destination))
+    index.pop(name, None)
+    save_trash_index(index)
+    return {"path": virtual_path(destination), "name": destination.name}
+
+
+def empty_trash() -> int:
+    """Unlink everything in the trash. This is the one irreversible action."""
+    removed = 0
+    for entry in trash_entries():
+        try:
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+            removed += 1
+        except OSError:
+            continue
+    save_trash_index({})
+    return removed
 
 
 # --------------------------------------------------------------- host facts
@@ -2615,20 +2742,17 @@ def notifications_facts(storage: dict, services: list[dict]) -> list[dict]:
                     "action": {"label": "Review services", "route": "apps"},
                 }
             )
-    try:
-        trashed = sum(1 for _ in TRASH.iterdir())
-    except OSError:
-        trashed = 0
+    trashed = trash_count()
     if trashed:
         items.append(
             {
                 "id": "n-trash",
                 "title": f"{trashed} item{'s' if trashed != 1 else ''} in Trash",
-                "body": "Deleted files stay on disk until the trash is emptied.",
+                "body": "They stay on disk until you empty Trash in Files, so anything can be put back.",
                 "tone": "info",
                 "time": "now",
                 "read": True,
-                "action": {"label": "Open Files", "route": "files"},
+                "action": {"label": "Open Trash", "route": "files", "trash": True},
             }
         )
     return items
@@ -2892,11 +3016,15 @@ class Handler(BaseHTTPRequestHandler):
                             for node in sorted(nodes, key=lambda item: item["name"].lower())
                             if node["parent"] == "/" and node["type"] == "folder"
                         ],
+                        "trash": {"count": trash_count()},
                     }
                 )
                 return
             if route == "/api/files/content":
                 self.download()
+                return
+            if route == "/api/trash":
+                self.json(trash_facts())
                 return
             self.fail("not found", HTTPStatus.NOT_FOUND)
         except ValueError as error:
@@ -3005,6 +3133,11 @@ class Handler(BaseHTTPRequestHandler):
             if route == "/api/files/content":
                 self.upload()
                 return
+            if route == "/api/trash/restore":
+                payload = self.body()
+                restored = restore_from_trash(str(payload.get("name") or ""))
+                self.json({"ok": True, **restored})
+                return
             if route == "/api/users":
                 session = session_facts(self.identity())
                 space = create_space(self.body(), session)
@@ -3083,6 +3216,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         route = urllib.parse.urlsplit(self.path).path.rstrip("/") or "/"
         try:
+            if route == "/api/trash":
+                removed = empty_trash()
+                self.json({"ok": True, "removed": removed})
+                return
             if route.startswith("/api/users/") and route.endswith("/share"):
                 slug = urllib.parse.unquote(route[len("/api/users/") :].removesuffix("/share"))
                 session = session_facts(self.identity())

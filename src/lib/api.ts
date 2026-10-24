@@ -9,6 +9,7 @@ import type {
   StorageState,
   SystemInfo,
   SystemService,
+  TrashItem,
   UserAccount,
   UserRole,
 } from '../types'
@@ -24,6 +25,8 @@ export interface StatePayload {
   services: SystemService[]
   notifications: NotificationItem[]
   roots: RootEntry[]
+  /** How many items are waiting in Trash, so the sidebar can say so. */
+  trash?: { count: number }
 }
 
 export class ApiError extends Error {
@@ -85,6 +88,11 @@ export const api = {
   rename: (path: string, name: string) =>
     post<{ ok: true; path: string }>('/api/files/rename', { path, name }),
   remove: (paths: string[]) => post<{ ok: true; moved: number }>('/api/files/delete', { paths }),
+  trash: () => request<{ items: TrashItem[]; bytes: number }>('/api/trash'),
+  restoreTrash: (name: string) =>
+    post<{ ok: true; path: string; name: string }>('/api/trash/restore', { name }),
+  emptyTrash: () =>
+    request<{ ok: true; removed: number }>('/api/trash', { method: 'DELETE' }),
   star: (path: string, starred: boolean) =>
     post<{ ok: true; starred: boolean }>('/api/files/star', { path, starred }),
 

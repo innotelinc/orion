@@ -13,8 +13,9 @@ DevTools Protocol at `127.0.0.1:9222`; the data is this machine's.
   seconds by the API, uptime, volume capacity, running units and the files that
   changed most recently.
 - **Files** — deep-linkable folders (`#/files?path=/files`), upload, new folder,
-  rename, star, download, image preview and trash. Every action is a real
-  filesystem call on `/srv/storage`.
+  rename, star, download, image preview and a Trash pane
+  (`#/files?trash=1`) that lists what was deleted, puts it back, or empties it.
+  Every action is a real filesystem call on `/srv/storage`.
 - **Spaces** — every person gets a folder under `/srv/storage/Users`, created or
   removed in Settings → Users and browsable like any other folder. A space is a
   folder, not a session: there is no sign-in or logout attached to it. Who may
@@ -56,6 +57,9 @@ The dev server proxies `/api` to `http://127.0.0.1:8099` by default; set
 | `POST /api/files/{mkdir,rename,delete,star}` | filesystem mutations; deletes move to `.orion/trash` |
 | `POST /api/files/content?path=&name=` | upload, streamed to disk |
 | `GET /api/files/content?path=` | download, or `&inline=1` for previews |
+| `GET /api/trash` | every trashed item, the folder it came from, when, and its size |
+| `POST /api/trash/restore` | put one item back where it was deleted from |
+| `DELETE /api/trash` | unlink everything in Trash — the one irreversible action |
 | `POST /api/services` | start/stop/restart a unit |
 | `POST /api/apps` | install or remove a catalogue app with apt |
 | `POST /api/users/{slug}/password` | create or reset that space's Samba account and sign-in |
@@ -74,6 +78,23 @@ member, and an agency admin may only touch spaces filed under their own
 agency — never their own, and never another agency admin. `GET /api/state`
 carries the answer (`session` plus a `manageable` flag per space) so the UI can
 mirror it instead of guessing.
+
+### Trash
+
+Nothing in the desktop unlinks a file. A delete moves the item into
+`.orion/trash`, and the path it came from is written to `.orion/trash.json`
+before the move, because afterwards there is nothing left to read it from. The
+Trash pane in Files lists every item with that path, when it was deleted and how
+big it is; **Restore** puts it back in the folder it came from, and if something
+new has taken the name it arrives beside it rather than over it. An item whose
+folder has since gone is refused rather than dropped somewhere arbitrary. Two
+deletions of the same name are both kept — the second is stored under a suffixed
+name, and each remembers its own origin.
+
+**Empty trash** is the only irreversible action in the app: it unlinks every
+item and clears the registry. The sidebar badge reads the count from
+`/api/state`, so a delete shows up without opening the pane, and the Trash notice
+on the dashboard links straight to it.
 
 A space is a directory: `/srv/storage/Users/<slug>`, named from the person with a
 numeric suffix when two people share a name. Removing one goes through Trash like

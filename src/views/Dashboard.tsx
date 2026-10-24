@@ -508,6 +508,7 @@ export function Dashboard({ navigate, onOpenPalette }: DashboardProps) {
                           navigate(notification.action.route, {
                             path: notification.action.path,
                             tab: notification.action.tab,
+                            trash: notification.action.trash,
                           })
                         }
                       }}

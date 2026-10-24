@@ -51,6 +51,7 @@ function NotificationsMenu({
       navigate(notification.action.route, {
         path: notification.action.path,
         tab: notification.action.tab,
+        trash: notification.action.trash,
       })
     }
     setOpen(false)

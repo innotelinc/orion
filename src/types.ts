@@ -91,6 +91,19 @@ export interface ShareClient {
 }
 
 /**
+ * One item in the trash, with the folder it was deleted from. `name` is the
+ * name it is stored under there, which can differ when two deletes collided.
+ */
+export interface TrashItem {
+  name: string
+  /** Virtual path it came from; empty when this app did not record one. */
+  original: string
+  type: 'folder' | 'file'
+  size: number
+  deletedAt: string
+}
+
+/**
  * A person's own folder on the storage volume. There is no session attached:
  * adding one creates the directory, removing one moves it to Trash.
  */
@@ -234,6 +247,8 @@ export interface NotificationAction {
   route: RouteName
   path?: string
   tab?: SettingsTab
+  /** Open Files on its Trash pane rather than a folder. */
+  trash?: boolean
 }
 
 export interface NotificationItem {

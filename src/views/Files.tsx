@@ -25,6 +25,7 @@ import {
   Search,
   Star,
   Trash2,
+  Undo2,
   Upload,
   Users,
   X,
@@ -84,10 +85,11 @@ type SortKey = 'name' | 'modified' | 'size'
 interface FilesProps {
   navigate: (name: RouteName, options?: NavigateOptions) => void
   initialPath?: string
+  initialTrash?: boolean
   highlightId?: string
 }
 
-export function Files({ navigate, initialPath, highlightId }: FilesProps) {
+export function Files({ navigate, initialPath, initialTrash, highlightId }: FilesProps) {
   const {
     files,
     roots,
@@ -100,10 +102,18 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
     renameFile,
     deleteFiles,
     toggleStar,
+    trashItems,
+    trashCount,
+    loadTrash,
+    restoreTrash,
+    emptyTrash,
     pushToast,
   } = useApp()
 
   const currentPath = initialPath ?? '/'
+  // Trash is a pane of Files rather than a folder: its items are not part of the
+  // tree, and the route says so (`#/files?trash=1`) so a link can open it.
+  const trashOpen = Boolean(initialTrash)
   const [query, setQuery] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortAsc, setSortAsc] = useState(true)
@@ -118,6 +128,8 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
   const [renameValue, setRenameValue] = useState('')
   const [renameError, setRenameError] = useState<string | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [emptyTrashOpen, setEmptyTrashOpen] = useState(false)
+  const [trashBusy, setTrashBusy] = useState(false)
   const uploadRef = useRef<HTMLInputElement>(null)
 
   const entries = useMemo(() => {
@@ -147,6 +159,13 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
   const totalCapacity = storage.pools.reduce((total, pool) => total + pool.totalBytes, 0)
   const usedPercent = formatPercent(totalUsed, totalCapacity)
   const folderSize = entries.reduce((total, node) => total + (node.size ?? 0), 0)
+
+  // The pane reads the trash when it opens, and after every change made here.
+  useEffect(() => {
+    if (!trashOpen) return
+    setSelectedIds(new Set())
+    void loadTrash()
+  }, [trashOpen, loadTrash])
 
   useEffect(() => {
     if (!highlightId) return
@@ -228,6 +247,31 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
     setSelectedIds(new Set())
     setDeleteOpen(false)
   }
+
+  const submitRestore = async (name: string) => {
+    setTrashBusy(true)
+    const result = await restoreTrash(name)
+    setTrashBusy(false)
+    if (!result.ok) {
+      pushToast({
+        title: 'Could not put that back',
+        description: result.error,
+        tone: 'error',
+      })
+    }
+  }
+
+  const confirmEmptyTrash = async () => {
+    setTrashBusy(true)
+    const result = await emptyTrash()
+    setTrashBusy(false)
+    setEmptyTrashOpen(false)
+    if (!result.ok) {
+      pushToast({ title: 'Could not empty Trash', description: result.error, tone: 'error' })
+    }
+  }
+
+  const trashBytes = trashItems.reduce((total, item) => total + item.size, 0)
 
   const copyPath = async (path: string) => {
     try {
@@ -323,6 +367,20 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
                 </button>
               )
             })}
+            <button
+              type="button"
+              className={classNames('files-sidebar__item', trashOpen && 'is-active')}
+              onClick={() => navigate('files', { trash: true })}
+              title={
+                trashCount
+                  ? `${trashCount} item${trashCount === 1 ? '' : 's'} can still be put back`
+                  : 'Nothing has been deleted'
+              }
+            >
+              <Trash2 size={15} aria-hidden="true" />
+              <span>Trash</span>
+              <small>{trashCount}</small>
+            </button>
           </nav>
 
           {spaces.length > 0 ? (
@@ -391,22 +449,54 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
         <div className="files-main">
           <div className="files-toolbar">
             <nav className="breadcrumbs" aria-label="Breadcrumb">
-              {breadcrumbs.map((crumb, index) => (
-                <span key={crumb.path}>
-                  {index > 0 ? <ChevronRight size={12} aria-hidden="true" /> : null}
-                  <button
-                    type="button"
-                    aria-current={index === breadcrumbs.length - 1 ? 'page' : undefined}
-                    onClick={() => navigate('files', { path: crumb.path })}
-                  >
-                    {index === 0 ? <HardDrive size={12} aria-hidden="true" /> : null}
-                    {crumb.label}
+              <span>
+                <button type="button" onClick={() => navigate('files', { path: '/' })}>
+                  <HardDrive size={12} aria-hidden="true" />
+                  Orion
+                </button>
+              </span>
+              {trashOpen ? (
+                <span>
+                  <ChevronRight size={12} aria-hidden="true" />
+                  <button type="button" aria-current="page">
+                    Trash
                   </button>
                 </span>
-              ))}
+              ) : (
+                breadcrumbs.slice(1).map((crumb, index) => (
+                  <span key={crumb.path}>
+                    <ChevronRight size={12} aria-hidden="true" />
+                    <button
+                      type="button"
+                      aria-current={index === breadcrumbs.length - 2 ? 'page' : undefined}
+                      onClick={() => navigate('files', { path: crumb.path })}
+                    >
+                      {crumb.label}
+                    </button>
+                  </span>
+                ))
+              )}
             </nav>
 
             <div className="files-toolbar__actions">
+              {trashOpen ? (
+                <>
+                  <span className="files-trash__summary">
+                    {trashItems.length} {trashItems.length === 1 ? 'item' : 'items'} ·{' '}
+                    {formatBytes(trashBytes)}
+                  </span>
+                  <button
+                    type="button"
+                    className="button button--sm button--danger"
+                    disabled={trashBusy || trashItems.length === 0}
+                    onClick={() => setEmptyTrashOpen(true)}
+                  >
+                    <Trash2 size={13} aria-hidden="true" />
+                    Empty trash
+                  </button>
+                </>
+              ) : (
+                <>
               <label className="files-search">
                 <Search size={14} aria-hidden="true" />
                 <input
@@ -483,10 +573,12 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
               >
                 <PanelRight size={16} aria-hidden="true" />
               </button>
+                </>
+              )}
             </div>
           </div>
 
-          {selectedNodes.length > 0 ? (
+          {!trashOpen && selectedNodes.length > 0 ? (
             <div className="files-bulk" role="status">
               <span className="files-bulk__count">
                 {selectedNodes.length} selected
@@ -528,7 +620,61 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
           ) : null}
 
           <div className="files-content">
-            {entries.length === 0 ? (
+            {trashOpen ? (
+              trashItems.length === 0 ? (
+                <EmptyState
+                  icon={Trash2}
+                  title="Trash is empty"
+                  description="Anything you delete waits here until the trash is emptied, so a mistake can be put back."
+                  action={
+                    <button
+                      type="button"
+                      className="button button--primary"
+                      onClick={() => navigate('files', { path: '/' })}
+                    >
+                      Back to files
+                    </button>
+                  }
+                />
+              ) : (
+                <div className="files-trash">
+                  <p className="files-trash__hint">
+                    Restore puts an item back in the folder it came from. Empty trash deletes it
+                    from the disk for good.
+                  </p>
+                  <ul className="trash-list">
+                    {trashItems.map((item) => (
+                      <li key={item.name} className="trash-row">
+                        <span className="trash-row__glyph" aria-hidden="true">
+                          <Trash2 size={16} />
+                        </span>
+                        <div className="trash-row__copy">
+                          <strong>{item.name}</strong>
+                          <span>
+                            {item.original
+                              ? `from ${item.original}`
+                              : 'the folder it came from was not recorded'}
+                            {' · deleted '}
+                            {relativeTime(item.deletedAt)}
+                            {' · '}
+                            {formatBytes(item.size)}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="button button--sm button--ghost"
+                          disabled={trashBusy}
+                          onClick={() => void submitRestore(item.name)}
+                        >
+                          <Undo2 size={13} aria-hidden="true" />
+                          Restore
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )
+            ) : entries.length === 0 ? (
               <EmptyState
                 icon={query ? Search : FolderOpen}
                 title={query ? 'No files match that search' : 'This folder is empty'}
@@ -729,18 +875,27 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
 
           <footer className="files-footer">
             <span>
-              {entries.length} {entries.length === 1 ? 'item' : 'items'}
-              {query ? ` matching “${query}”` : ''}
+              {trashOpen
+                ? `${trashItems.length} ${trashItems.length === 1 ? 'item' : 'items'} in Trash`
+                : `${entries.length} ${entries.length === 1 ? 'item' : 'items'}${
+                    query ? ` matching “${query}”` : ''
+                  }`}
             </span>
             <span className="dim">
-              {folderSize > 0 ? `${formatBytes(folderSize)} in this folder` : 'Folders · files'}
+              {trashOpen
+                ? trashItems.length
+                  ? `${formatBytes(trashBytes)} can still be put back`
+                  : 'Nothing to recover'
+                : folderSize > 0
+                  ? `${formatBytes(folderSize)} in this folder`
+                  : 'Folders · files'}
             </span>
-            <span className="files-footer__path">{currentPath}</span>
+            <span className="files-footer__path">{trashOpen ? 'Trash' : currentPath}</span>
           </footer>
         </div>
 
         <aside
-          className={classNames('files-details', showDetails && 'is-open')}
+          className={classNames('files-details', showDetails && !trashOpen && 'is-open')}
           aria-label="File details"
         >
           <header className="files-details__head">
@@ -1029,6 +1184,38 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
             ) : null}
           </div>
         </form>
+      </Modal>
+
+      <Modal
+        open={emptyTrashOpen}
+        onClose={() => setEmptyTrashOpen(false)}
+        title="Empty the trash?"
+        description="Every item in Trash is deleted from the disk. Nothing else is touched."
+        size="sm"
+        footer={
+          <>
+            <button type="button" className="button" onClick={() => setEmptyTrashOpen(false)}>
+              Keep them
+            </button>
+            <button
+              type="button"
+              className="button button--danger"
+              disabled={trashBusy}
+              onClick={() => void confirmEmptyTrash()}
+            >
+              <Trash2 size={14} aria-hidden="true" />
+              Delete for good
+            </button>
+          </>
+        }
+      >
+        <div className="danger-note">
+          <Trash2 size={17} aria-hidden="true" />
+          <span>
+            {trashItems.length} {trashItems.length === 1 ? 'item' : 'items'} ·{' '}
+            {formatBytes(trashBytes)}
+          </span>
+        </div>
       </Modal>
 
       <Modal

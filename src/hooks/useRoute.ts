@@ -18,12 +18,15 @@ export interface RouteState {
   path?: string
   tab?: SettingsTab
   highlight?: string
+  /** Files opens on its Trash pane instead of a folder. */
+  trash?: boolean
 }
 
 export interface NavigateOptions {
   path?: string
   tab?: SettingsTab
   highlight?: string
+  trash?: boolean
   replace?: boolean
 }
 
@@ -43,6 +46,7 @@ function parseHash(hash: string): RouteState {
     path: params.get('path') ?? undefined,
     tab,
     highlight: params.get('highlight') ?? undefined,
+    trash: params.get('trash') === '1' ? true : undefined,
   }
 }
 
@@ -51,6 +55,7 @@ export function buildHash(name: RouteName, options: NavigateOptions = {}) {
   if (options.path) params.set('path', options.path)
   if (options.tab) params.set('tab', options.tab)
   if (options.highlight) params.set('highlight', options.highlight)
+  if (options.trash) params.set('trash', '1')
   const query = params.toString()
   return `#/${name}${query ? `?${query}` : ''}`
 }

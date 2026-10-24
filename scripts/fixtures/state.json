@@ -184,6 +184,7 @@
       "action": { "label": "Open the share", "route": "files", "path": "/Users/ada" }
     }
   ],
+  "trash": { "count": 2 },
   "roots": [
     { "label": "media", "path": "/media" },
     { "label": "Users", "path": "/Users" }

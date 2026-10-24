@@ -27,6 +27,7 @@ import type {
   SystemService,
   Toast,
   ToastTone,
+  TrashItem,
   UserAccount,
   UserRole,
 } from '../types'
@@ -82,6 +83,13 @@ interface AppContextValue {
   renameFile: (id: string, name: string) => Promise<ActionResult>
   deleteFiles: (ids: string[]) => Promise<number>
   toggleStar: (id: string) => Promise<void>
+  /** Items in Trash, loaded when Files opens that pane. */
+  trashItems: TrashItem[]
+  /** How many are in Trash, from the polled state. */
+  trashCount: number
+  loadTrash: () => Promise<void>
+  restoreTrash: (name: string) => Promise<ActionResult>
+  emptyTrash: () => Promise<ActionResult>
   serviceAction: (unit: string, action: ServiceAction) => Promise<ActionResult>
   addSpace: (input: {
     name: string
@@ -161,6 +169,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [dismissed, setDismissed] = useState<Set<string>>(new Set())
   const [read, setRead] = useState<Set<string>>(new Set())
   const [toasts, setToasts] = useState<Toast[]>([])
+  const [trashItems, setTrashItems] = useState<TrashItem[]>([])
   const mounted = useRef(true)
 
   useEffect(() => {
@@ -344,7 +353,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await loadState()
         pushToast({
           title: `${result.moved} ${result.moved === 1 ? 'item' : 'items'} moved to Trash`,
-          description: 'They stay on disk under .orion/trash.',
+          description: 'They stay on disk until you empty Trash, so this can be undone.',
           tone: 'info',
         })
         return result.moved
@@ -359,6 +368,61 @@ export function AppProvider({ children }: { children: ReactNode }) {
     },
     [loadState, pushToast],
   )
+
+  const loadTrash = useCallback(async () => {
+    try {
+      const payload = await api.trash()
+      setTrashItems(payload.items)
+    } catch {
+      // Trash is a convenience, not the page: an API that cannot answer leaves
+      // the list empty rather than taking Files down with it.
+      setTrashItems([])
+    }
+  }, [])
+
+  const restoreTrash = useCallback(
+    async (name: string): Promise<ActionResult> => {
+      try {
+        const result = await api.restoreTrash(name)
+        await loadState()
+        await loadTrash()
+        pushToast({
+          title: `Put back as ${result.name}`,
+          description: result.path,
+          tone: 'success',
+        })
+        return { ok: true }
+      } catch (failure) {
+        return {
+          ok: false,
+          error:
+            failure instanceof Error ? failure.message : 'The host could not put that back.',
+        }
+      }
+    },
+    [loadState, loadTrash, pushToast],
+  )
+
+  const emptyTrash = useCallback(async (): Promise<ActionResult> => {
+    try {
+      const result = await api.emptyTrash()
+      await loadState()
+      await loadTrash()
+      pushToast({
+        title: result.removed
+          ? `${result.removed} ${result.removed === 1 ? 'item' : 'items'} deleted for good`
+          : 'Trash was already empty',
+        description: result.removed ? 'What was in Trash is gone from the disk.' : undefined,
+        tone: result.removed ? 'info' : 'success',
+      })
+      return { ok: true }
+    } catch (failure) {
+      return {
+        ok: false,
+        error: failure instanceof Error ? failure.message : 'The host refused to empty it.',
+      }
+    }
+  }, [loadState, loadTrash, pushToast])
 
   const toggleStar = useCallback(
     async (id: string) => {
@@ -708,6 +772,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [dismissed, read, state.notifications],
   )
 
+  // The polled state is the count's source of truth; the loaded list answers
+  // before the next poll, so a delete shows up in the sidebar immediately.
+  const trashCount = state.trash?.count ?? trashItems.length
+
   const value = useMemo<AppContextValue>(
     () => ({
       settings,
@@ -732,6 +800,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       renameFile,
       deleteFiles,
       toggleStar,
+      trashItems,
+      trashCount,
+      loadTrash,
+      restoreTrash,
+      emptyTrash,
       serviceAction,
       addSpace,
       removeSpace,
@@ -768,6 +841,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       renameFile,
       deleteFiles,
       toggleStar,
+      trashItems,
+      trashCount,
+      loadTrash,
+      restoreTrash,
+      emptyTrash,
       serviceAction,
       addSpace,
       removeSpace,

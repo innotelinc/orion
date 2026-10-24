@@ -93,6 +93,81 @@
   font-weight: 600;
 }
 
+/* Trash is a pane of Files, not a folder: one row per deleted item, with the
+   folder it came from and the one action that undoes it. */
+.files-trash {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.files-trash__hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.files-trash__summary {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.trash-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.trash-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 8px;
+  border-radius: 9px;
+  border-bottom: 1px solid var(--border);
+  transition: background var(--transition);
+}
+.trash-row:last-child {
+  border-bottom: 0;
+}
+.trash-row:hover {
+  background: var(--surface-2);
+}
+.trash-row__glyph {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: var(--surface-3);
+}
+.trash-row__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.trash-row__copy strong {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trash-row__copy span {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  line-height: 1.45;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .files-sidebar__storage {
   margin-top: auto;
   padding: 12px 10px;

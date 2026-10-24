@@ -36,6 +36,7 @@ for (const [name, path] of [
   ['system', '/api/system'],
   ['state', '/api/state'],
   ['metrics', '/api/metrics'],
+  ['trash', '/api/trash'],
 ]) {
   fixtures[path] = fixtureDir
     ? await readFile(join(fixtureDir, `${name}.json`), 'utf8')
@@ -143,6 +144,23 @@ const filesShares = {
   rows: window.document.querySelectorAll('.files-sidebar .share-dot').length,
   live: window.document.querySelectorAll('.files-sidebar .share-dot--live').length,
 }
+// Deletes are recoverable, so the pane that proves it has to open and list what
+// was deleted, with the folder each item came from and a way back.
+const trashText = await at('#/files?trash=1')
+const trashPane = {
+  rows: window.document.querySelectorAll('.trash-row').length,
+  showsOriginal: trashText.includes('/media/old-notes.txt'),
+  showsWhen: /deleted /.test(trashText),
+  offersRestore: [...window.document.querySelectorAll('.trash-row button')].some((node) =>
+    node.textContent.includes('Restore'),
+  ),
+  offersEmpty: [...window.document.querySelectorAll('button')].some((node) =>
+    node.textContent.includes('Empty trash'),
+  ),
+  sidebar: [...window.document.querySelectorAll('.files-sidebar__item')].some((node) =>
+    node.textContent.includes('Trash'),
+  ),
+}
 const appsText = await at('#/apps')
 const unitCards = window.document.querySelectorAll('.store-card').length
 const storageText = await at('#/storage')
@@ -244,6 +262,7 @@ const summary = {
     filesShares,
     dashboardShares,
     shareNotice,
+    trashPane,
   },
   headings: [...window.document.querySelectorAll('h1, h2')].map((node) => node.textContent.trim()).slice(0, 8),
   errors: errors.slice(0, 3),
@@ -278,5 +297,10 @@ const broken =
   !summary.routes.dashboardShares.namesTheClient ||
   summary.routes.dashboardShares.live === 0 ||
   !summary.routes.shareNotice.namesMachine ||
-  !summary.routes.shareNotice.unread
+  !summary.routes.shareNotice.unread ||
+  summary.routes.trashPane.rows === 0 ||
+  !summary.routes.trashPane.showsOriginal ||
+  !summary.routes.trashPane.offersRestore ||
+  !summary.routes.trashPane.offersEmpty ||
+  !summary.routes.trashPane.sidebar
 process.exit(broken ? 1 : 0)

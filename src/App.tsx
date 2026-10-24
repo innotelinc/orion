@@ -112,6 +112,7 @@ export default function App() {
               <Files
                 navigate={navigate}
                 initialPath={route.path}
+                initialTrash={route.trash}
                 highlightId={route.highlight}
               />
             ) : null}

@@ -968,5 +968,106 @@ class SharedSpaceTestCase(unittest.TestCase):
         self.assertEqual(self._space("household").get("email", ""), "")
 
 
+class TrashTestCase(unittest.TestCase):
+    """Deletes are recoverable: the trash lists, restores and empties."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name) / "storage"
+        self.root.mkdir()
+        self.api = load_api(self.root)
+        (self.root / "media").mkdir()
+        (self.root / "media" / "notes.txt").write_text("hello")
+        (self.root / "Users" / "ada").mkdir(parents=True)
+        (self.root / "Users" / "ada" / "notes.txt").write_text("ada's")
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def _trash(self):
+        return self.api.trash_facts()["items"]
+
+    def test_a_delete_remembers_where_the_file_was(self):
+        self.assertEqual(self.api.move_to_trash(["/media/notes.txt"]), 1)
+        item = self._trash()[0]
+        self.assertEqual(item["name"], "notes.txt")
+        self.assertEqual(item["original"], "/media/notes.txt")
+        self.assertEqual(item["type"], "file")
+        self.assertTrue(item["deletedAt"])
+        self.assertFalse((self.root / "media" / "notes.txt").exists())
+
+    def test_two_files_with_the_same_name_keep_their_own_origin(self):
+        self.api.move_to_trash(["/media/notes.txt", "/Users/ada/notes.txt"])
+        items = self._trash()
+        self.assertEqual(len(items), 2)
+        # The second one could not keep its name in the trash, so the stored
+        # name differs — and each still points at the folder it came from.
+        self.assertEqual(len({item["name"] for item in items}), 2)
+        self.assertEqual(
+            sorted(item["original"] for item in items),
+            ["/Users/ada/notes.txt", "/media/notes.txt"],
+        )
+
+    def test_restore_puts_it_back_where_it_was(self):
+        self.api.move_to_trash(["/media/notes.txt"])
+        name = self._trash()[0]["name"]
+        restored = self.api.restore_from_trash(name)
+        self.assertEqual(restored["path"], "/media/notes.txt")
+        self.assertEqual((self.root / "media" / "notes.txt").read_text(), "hello")
+        self.assertEqual(self._trash(), [])
+
+    def test_restore_does_not_overwrite_something_new(self):
+        self.api.move_to_trash(["/media/notes.txt"])
+        (self.root / "media" / "notes.txt").write_text("newer")
+        name = self._trash()[0]["name"]
+        restored = self.api.restore_from_trash(name)
+        self.assertNotEqual(restored["path"], "/media/notes.txt")
+        self.assertEqual((self.root / "media" / "notes.txt").read_text(), "newer")
+        self.assertEqual(Path(self.root / restored["path"].lstrip("/")).read_text(), "hello")
+
+    def test_restore_refuses_when_the_folder_is_gone(self):
+        self.api.move_to_trash(["/media/notes.txt"])
+        name = self._trash()[0]["name"]
+        (self.root / "media").rmdir()
+        with self.assertRaises(ValueError):
+            self.api.restore_from_trash(name)
+        self.assertEqual(len(self._trash()), 1)
+
+    def test_restore_of_an_item_that_is_gone_is_a_miss(self):
+        with self.assertRaises(LookupError):
+            self.api.restore_from_trash("nothing-here.txt")
+
+    def test_an_item_placed_by_hand_still_appears(self):
+        (self.root / ".orion" / "trash").mkdir(parents=True)
+        (self.root / ".orion" / "trash" / "stray.txt").write_text("x")
+        item = self._trash()[0]
+        self.assertEqual(item["name"], "stray.txt")
+        self.assertEqual(item["original"], "")
+        # With no recorded origin it goes back to the root rather than nowhere.
+        self.assertEqual(self.api.restore_from_trash("stray.txt")["path"], "/stray.txt")
+
+    def test_a_pruned_entry_does_not_linger(self):
+        self.api.move_to_trash(["/media/notes.txt"])
+        (self.root / ".orion" / "trash" / "notes.txt").unlink()
+        self.assertEqual(self._trash(), [])
+        stored = json.loads((self.root / ".orion" / "trash.json").read_text())
+        self.assertEqual(stored["entries"], {})
+
+    def test_empty_trash_unlinks_everything(self):
+        (self.root / "media" / "folder").mkdir()
+        (self.root / "media" / "folder" / "inner.txt").write_text("x")
+        self.api.move_to_trash(["/media/notes.txt", "/media/folder"])
+        self.assertEqual(self.api.trash_count(), 2)
+        self.assertEqual(self.api.empty_trash(), 2)
+        self.assertEqual(self.api.trash_count(), 0)
+        self.assertEqual(self._trash(), [])
+        self.assertFalse((self.root / ".orion" / "trash" / "folder").exists())
+        self.assertEqual(json.loads((self.root / ".orion" / "trash.json").read_text())["entries"], {})
+
+    def test_the_count_is_what_the_listing_shows(self):
+        self.api.move_to_trash(["/media/notes.txt"])
+        self.assertEqual(self.api.trash_count(), len(self._trash()))
+
+
 if __name__ == "__main__":
     unittest.main()
