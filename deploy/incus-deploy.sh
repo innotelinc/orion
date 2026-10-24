@@ -43,6 +43,13 @@ exec > >(tee -a "$LOG") 2>&1
 echo
 echo "=== deploy $(date -u +%Y-%m-%dT%H:%M:%SZ) from ${SSH_ORIGIN:-local} ==="
 
+# A vite build wants a few hundred megabytes; at the 256MiB the container was
+# born with, the kernel kills it and the only trace is the word "Killed".
+MEM_MIB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+if [ "$MEM_MIB" -lt 1024 ]; then
+  echo "warning: this container has ${MEM_MIB}MiB of memory; the build may be OOM-killed" >&2
+fi
+
 if [ ! -d "$WORK/repo/.git" ]; then
   echo "cloning $REPO_URL"
   rm -rf "$WORK/repo"
@@ -91,15 +98,21 @@ install -m 0644 "$STAGE/server/orion-api.py" "$API"
 install -m 0644 "$STAGE/deploy/orion-api.service" "$UNIT"
 
 # The vhost is replaced only when it changed, so a deploy does not reload nginx
-# for nothing and cannot leave a broken file behind unnoticed.
+# for nothing. A candidate cannot be parked next to it for validation: every
+# file in sites-enabled is loaded, so a second copy of the vhost is a duplicate
+# default server. Install, test the real file, and put the old one back if the
+# test fails — nothing is serving it until the reload below.
 if ! cmp -s "$STAGE/deploy/nas.innotel.us.conf" "$VHOST"; then
-  install -m 0644 "$STAGE/deploy/nas.innotel.us.conf" "$VHOST.new"
-  nginx -t -c /etc/nginx/nginx.conf >/dev/null 2>&1 || {
+  KEEP=$(mktemp)
+  cp "$VHOST" "$KEEP"
+  install -m 0644 "$STAGE/deploy/nas.innotel.us.conf" "$VHOST"
+  if ! nginx -t >/dev/null 2>&1; then
     echo "the new vhost does not pass nginx -t; keeping the old one" >&2
-    rm -f "$VHOST.new"
+    install -m 0644 "$KEEP" "$VHOST"
+    rm -f "$KEEP"
     exit 3
-  }
-  mv "$VHOST.new" "$VHOST"
+  fi
+  rm -f "$KEEP"
   NEEDS_NGINX_RELOAD=1
 fi
 
