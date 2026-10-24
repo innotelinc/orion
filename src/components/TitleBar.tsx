@@ -239,17 +239,18 @@ export function TitleBar({ resolvedTheme, onToggleTheme, onOpenPalette, navigate
             size="sm"
           />
         </button>
-        {system?.identity ? (
-          <button
-            type="button"
-            className="icon-button"
-            onClick={signOut}
-            aria-label={`Sign out ${system.identity.email}`}
-            title={`Sign out ${system.identity.email}`}
-          >
-            <LogOut size={17} aria-hidden="true" />
-          </button>
-        ) : null}
+        {/* Always offered: ending the edge session works on the proxy cookie
+            alone, and a session with no forwarded identity is exactly when a
+            person cannot sign out anywhere else. */}
+        <button
+          type="button"
+          className="icon-button"
+          onClick={signOut}
+          aria-label={system?.identity ? `Sign out ${system.identity.email}` : 'Sign out'}
+          title={system?.identity ? `Sign out ${system.identity.email}` : 'Sign out'}
+        >
+          <LogOut size={17} aria-hidden="true" />
+        </button>
       </div>
     </header>
   )

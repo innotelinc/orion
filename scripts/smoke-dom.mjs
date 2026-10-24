@@ -108,6 +108,11 @@ const aboutText = await at('#/settings?tab=about')
 const settingsText = [generalText, usersText, aboutText].join(' ')
 await at('#/')
 
+// The way out lives in the shell. jsdom's fixture forwards no identity, so this
+// also proves the control is not conditional on one being present.
+const signOutButton = window.document.querySelector('.titlebar button[aria-label^="Sign out"]')
+const version = JSON.parse(fixtures['/api/system']).version.version
+
 const text = window.document.body.textContent.replace(/\s+/g, ' ')
 const summary = {
   title: window.document.title,
@@ -116,6 +121,8 @@ const summary = {
   tiles: window.document.querySelectorAll('.app-tile').length,
   apiErrorBanner: text.includes('The API is not answering'),
   crash: text.includes('Something went wrong'),
+  signOutOffered: Boolean(signOutButton),
+  signOutLabel: signOutButton?.getAttribute('aria-label') ?? null,
   uptimeShown: /Up \d+[dhm]/.test(text),
   bodyChars: text.length,
   routes: {
@@ -127,7 +134,7 @@ const summary = {
     storageShowsDevices: storageText.includes('Devices'),
     generalShowsRuntime: generalText.includes('Incus'),
     usersShowsRoot: usersText.includes('root'),
-    aboutShowsBuild: aboutText.includes('1.5.0'),
+    aboutShowsBuild: aboutText.includes(version),
   },
   headings: [...window.document.querySelectorAll('h1, h2')].map((node) => node.textContent.trim()).slice(0, 8),
   errors: errors.slice(0, 3),
@@ -145,5 +152,6 @@ const broken =
   summary.routes.poolCards === 0 ||
   !summary.routes.servicesShowNginx ||
   !summary.routes.generalShowsRuntime ||
-  !summary.routes.aboutShowsBuild
+  !summary.routes.aboutShowsBuild ||
+  !summary.signOutOffered
 process.exit(broken ? 1 : 0)
