@@ -163,6 +163,15 @@ const trashPane = {
 }
 const appsText = await at('#/apps')
 const unitCards = window.document.querySelectorAll('.store-card').length
+// An entry the container cannot run says so on the card, and offers no install.
+const appsCatalogue = {
+  statesWhy: appsText.includes('cannot mount the kernel nfsd filesystem'),
+  noInstall: ![...window.document.querySelectorAll('.store-card')]
+    .filter((card) => card.textContent.includes('NFS server'))
+    .some((card) =>
+      [...card.querySelectorAll('button')].some((button) => button.textContent.trim() === 'Install'),
+    ),
+}
 const storageText = await at('#/storage')
 const poolCards = window.document.querySelectorAll('.pool-card').length
 // Every Settings tab, not just the ones with assertions below: the crash this
@@ -250,6 +259,7 @@ const summary = {
     filesShowsVolume: filesText.includes('backups') && filesText.includes('media'),
     serviceCards: unitCards,
     servicesShowNginx: appsText.includes('nginx'),
+    appsCatalogue,
     poolCards,
     storageShowsDevices: storageText.includes('Devices'),
     generalShowsRuntime: generalText.includes('Incus'),
@@ -279,6 +289,8 @@ const broken =
   summary.routes.serviceCards === 0 ||
   summary.routes.poolCards === 0 ||
   !summary.routes.servicesShowNginx ||
+  !summary.routes.appsCatalogue.statesWhy ||
+  !summary.routes.appsCatalogue.noInstall ||
   !summary.routes.generalShowsRuntime ||
   !summary.routes.aboutShowsBuild ||
   !summary.signOutOffered ||

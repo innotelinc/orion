@@ -111,6 +111,18 @@ It runs as `orion-api.service` and is only reachable through nginx.
 (`avahi-daemon`) and **Windows discovery** (`wsdd`). Only catalogue ids are
 accepted — the endpoint does not take a package name from the browser.
 
+Each entry also carries `available` and, when it is false, `unavailable`: the
+reason in a sentence. **NFS server is unavailable in this container.** nfsd is a
+kernel filesystem rather than a daemon, and an unprivileged container cannot
+mount `/proc/fs/nfsd`, so `proc-fs-nfsd.mount` fails, `nfs-server.service` fails
+with it — and apt installs the packages without complaint. The API therefore
+probes with a real mount attempt (once per process) and refuses
+the install with that reason instead of leaving a systemd error to be read
+later. The store shows the entry as *unavailable*, offers **Remove** if the
+packages are already there, and never offers an install or a restart it knows
+cannot work. An NFS export belongs on the host; SMB is what this container
+serves.
+
 The service is `ProtectSystem=strict`, which is what keeps a bug here out of
 `/etc`. apt, `useradd` and `smbpasswd` genuinely need that access, so each change
 runs in a transient unit via `systemd-run`: the daemon's privileges, none of its

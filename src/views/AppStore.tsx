@@ -127,13 +127,18 @@ export function AppStore({ navigate }: AppStoreProps) {
           <h3>{app.name}</h3>
           <span>{app.tagline}</span>
         </div>
-        {app.installed ? (
+        {app.available === false ? (
+          <StatusBadge tone="warning">unavailable</StatusBadge>
+        ) : app.installed ? (
           <StatusBadge tone={app.active ? 'success' : 'warning'}>{app.state}</StatusBadge>
         ) : (
           <span className="store-category">available</span>
         )}
       </header>
       <p className="store-card__description">{app.description}</p>
+      {app.available === false && app.unavailable ? (
+        <p className="store-card__unavailable">{app.unavailable}</p>
+      ) : null}
       <div className="store-card__meta">
         <code>{app.packages.join(' ')}</code> · <code>{app.unit}</code>
       </div>
@@ -155,7 +160,8 @@ export function AppStore({ navigate }: AppStoreProps) {
               <button
                 type="button"
                 className="button button--sm"
-                disabled={busy !== null}
+                disabled={busy !== null || app.available === false}
+                title={app.available === false ? app.unavailable : undefined}
                 onClick={() => void act(app.unit, 'restart', app.name)}
               >
                 {busy === app.unit ? (
@@ -175,6 +181,10 @@ export function AppStore({ navigate }: AppStoreProps) {
                 Remove
               </button>
             </>
+          ) : app.available === false ? (
+            <span className="store-category" title={app.unavailable}>
+              cannot run here
+            </span>
           ) : (
             <button
               type="button"

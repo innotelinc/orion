@@ -1069,5 +1069,46 @@ class TrashTestCase(unittest.TestCase):
         self.assertEqual(self.api.trash_count(), len(self._trash()))
 
 
+class AppCatalogueTestCase(unittest.TestCase):
+    """An entry the container cannot run must say so before anybody installs it."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name) / "storage"
+        self.root.mkdir()
+        self.api = load_api(self.root)
+        self.api.NFS_CAPABLE = None
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def _nfs(self):
+        return next(app for app in self.api.apps_facts() if app["id"] == "nfs")
+
+    def test_nfs_is_unavailable_where_the_kernel_will_not_mount_it(self):
+        def refuse(script, **kwargs):
+            raise RuntimeError("mount: /proc/fs/nfsd: permission denied.")
+
+        self.api.run_root = refuse
+        entry = self._nfs()
+        self.assertFalse(entry["available"])
+        self.assertIn("nfsd", entry["unavailable"])
+
+    def test_installing_it_there_is_refused_before_apt_runs(self):
+        def refuse(script, **kwargs):
+            raise RuntimeError("mount: /proc/fs/nfsd: permission denied.")
+
+        self.api.run_root = refuse
+        with self.assertRaises(ValueError) as caught:
+            self.api.install_app("nfs")
+        self.assertIn("cannot serve NFS", str(caught.exception))
+
+    def test_a_capable_host_offers_it(self):
+        self.api.run_root = lambda script, **kwargs: ""
+        entry = self._nfs()
+        self.assertTrue(entry["available"])
+        self.assertEqual(entry["unavailable"], "")
+
+
 if __name__ == "__main__":
     unittest.main()

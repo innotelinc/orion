@@ -403,6 +403,18 @@ html[data-theme='light'] .featured-card__label {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+/* Why an entry cannot run here, stated on the card rather than by a failed
+   install or a systemd error afterwards. */
+.store-card__unavailable {
+  margin: 0;
+  padding: 7px 9px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--warning) 26%, transparent);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
 .store-card__meta {
   display: flex;
   align-items: center;

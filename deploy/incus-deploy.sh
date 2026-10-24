@@ -130,8 +130,11 @@ systemctl restart orion-api
 # previous one back if it is not: a deploy that leaves a broken site should be
 # the thing that fails, not the user's next page load.
 healthy=0
-for _ in 1 2 3 4 5; do
-  sleep 1
+# This container has ~640MiB and a build leaves it swapping, so the API can
+# take longer than five seconds to bind. That is a slow start, not a broken
+# site; a deploy that rolled itself back over it is the bug being fixed here.
+for _ in $(seq 1 15); do
+  sleep 2
   if curl -fsS -m 5 http://127.0.0.1:8099/api/system >/dev/null &&
      curl -fsS -m 5 http://127.0.0.1/health >/dev/null; then
     healthy=1

@@ -135,6 +135,20 @@
       "state": "active"
     },
     {
+      "id": "nfs",
+      "name": "NFS server",
+      "tagline": "Kernel NFS for Linux and macOS clients",
+      "description": "Installs the NFS server and starts it.",
+      "category": "Sharing",
+      "packages": ["nfs-kernel-server"],
+      "unit": "nfs-server.service",
+      "installed": false,
+      "active": false,
+      "state": "not installed",
+      "available": false,
+      "unavailable": "This container cannot mount the kernel nfsd filesystem, so it cannot export NFS. Run the export on the host, or use SMB."
+    },
+    {
       "id": "discovery",
       "name": "Network discovery",
       "tagline": "orion-nas.local on the LAN",

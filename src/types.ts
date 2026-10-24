@@ -146,6 +146,10 @@ export interface AppEntry {
   installed: boolean
   active: boolean
   state: string
+  /** False when this host cannot run the app at all, however cleanly it installs. */
+  available?: boolean
+  /** Why, in a sentence, when `available` is false. */
+  unavailable?: string
 }
 
 export interface Disk {

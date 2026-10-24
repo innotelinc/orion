@@ -1552,9 +1552,48 @@ def app_by_id(app_id: str) -> dict:
     raise LookupError("no such app")
 
 
+NFS_CAPABLE: bool | None = None
+
+
+def nfs_server_capable() -> bool:
+    """Whether this host can serve NFS at all, not merely install the package.
+
+    nfsd is a kernel filesystem rather than a daemon: an unprivileged container
+    cannot mount /proc/fs/nfsd, so `proc-fs-nfsd.mount` fails and every start of
+    `nfs-server.service` fails with it — while apt installs the packages happily.
+    That is exactly the shape of a store entry that lies, so the probe is a real
+    mount attempt, cached for the life of this process.
+    """
+    global NFS_CAPABLE
+    if NFS_CAPABLE is not None:
+        return NFS_CAPABLE
+    try:
+        run_root(
+            "set -e\n"
+            "mountpoint -q /proc/fs/nfsd >/dev/null 2>&1 || "
+            "mount -t nfsd nfsd /proc/fs/nfsd >/dev/null 2>&1\n"
+            "test -e /proc/fs/nfsd/threads\n",
+            timeout=20,
+        )
+        NFS_CAPABLE = True
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        NFS_CAPABLE = False
+    return NFS_CAPABLE
+
+
 def app_facts(app: dict) -> dict:
     installed = all(dpkg_installed(package) for package in app["packages"])
     active, state = unit_state(app["unit"]) if installed else (False, "not installed")
+    # A catalogue entry may need the kernel or a device the container does not
+    # have; saying so before the install is better than a systemd error after it.
+    available = True
+    unavailable = ""
+    if app["id"] == "nfs" and not nfs_server_capable():
+        available = False
+        unavailable = (
+            "This container cannot mount the kernel nfsd filesystem, so it cannot "
+            "export NFS. Run the export on the host, or use SMB."
+        )
     return {
         "id": app["id"],
         "name": app["name"],
@@ -1566,6 +1605,8 @@ def app_facts(app: dict) -> dict:
         "installed": installed,
         "active": active,
         "state": state,
+        "available": available,
+        "unavailable": unavailable,
     }
 
 
@@ -1625,6 +1666,11 @@ def run_root(script: str, stdin_text: str | None = None, timeout: int = APT_TIME
 
 def install_app(app_id: str) -> dict:
     app = app_by_id(app_id)
+    if app["id"] == "nfs" and not nfs_server_capable():
+        raise ValueError(
+            "this container cannot serve NFS: it cannot mount nfsd. "
+            "Run the export on the host, or use SMB."
+        )
     packages = " ".join(app["packages"])
     run_root(
         "set -e\n"
