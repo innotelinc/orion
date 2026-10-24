@@ -128,10 +128,16 @@ front of it, which is the same shape the live estate runs:
 browser → your vhost (TLS) → orion-sso :4180 → orion :8080 → /api → orion-api
 ```
 
-The proxy authenticates against your OIDC provider and passes the identity as
-`X-Auth-Request-Email` / `-User` / `-Groups`; nginx hands those to the API, which
-is what Settings → Security shows and what the desktop greets you by. Nothing in
-the app reads a password or a token.
+The proxy authenticates against your OIDC provider and passes the identity on
+the upstream request as `X-Forwarded-Email`, `-User`, `-Preferred-Username` and
+`-Groups` (`--pass-user-headers`); nginx hands those to the API, which is what
+Settings → Security shows and what the desktop greets you by. Nothing in the app
+reads a password or a token.
+
+Do not substitute `--set-xauthrequest` for that: those `X-Auth-Request-*`
+headers are written to the *response*, for nginx's `auth_request` mode, so an app
+that is plain-proxied never sees identity at all. The API accepts both families
+for that reason, but only the forwarded one is ever sent here.
 
 ```bash
 ./install.sh --sso
@@ -208,7 +214,7 @@ deploy; Settings → About reads it.
 - `point-npm.py` — repoints the NPM proxy host at the sign-in proxy, keeping its
   certificate.
 
-The proxy forwards the signed-in address as `X-Auth-Request-Email`. The API shows
+The proxy forwards the signed-in address as `X-Forwarded-Email`. The API shows
 it as the current session, and the landing page's title bar prints it once
 `/api/system` answers. Settings → Users offers **Sign out**, and the
 landing page carries the same link in that bar, so signing out never requires

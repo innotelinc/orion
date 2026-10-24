@@ -36,7 +36,11 @@ services:
       - --cookie-samesite=lax
       - --whitelist-domain=.innotel.us
       - --reverse-proxy=true
-      - --set-xauthrequest=true
+      # The app is proxied, not auth_request'ed, so the identity has to ride on
+      # the upstream request: that is --pass-user-headers (X-Forwarded-Email,
+      # -User, -Preferred-Username, -Groups). --set-xauthrequest only writes
+      # X-Auth-Request-* response headers for nginx auth_request mode, which
+      # nothing here reads.
       - --pass-user-headers=true
       - --upstream=http://192.168.1.89:80
       - --http-address=0.0.0.0:4180

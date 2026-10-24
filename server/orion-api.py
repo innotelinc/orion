@@ -1602,31 +1602,59 @@ class Handler(BaseHTTPRequestHandler):
         self.json({"error": message}, status)
 
     def identity(self) -> dict | None:
-        email = (
-            self.headers.get("X-Auth-Request-Email")
-            or self.headers.get("X-Authentik-Email")
-            or ""
-        ).strip()
+        """Who the edge says is signed in, or None.
+
+        Two header families are accepted because the two ways of putting
+        oauth2-proxy in front of a service send different ones:
+
+        * `X-Forwarded-*` is what the proxy adds to the *upstream request* —
+          its `--pass-user-headers` flag. This is the path the estate uses.
+        * `X-Auth-Request-*` is only ever a *response* header, from
+          `--set-xauthrequest`, for nginx's auth_request mode. Kept because
+          other deployments front this app that way.
+
+        Reading only the second family is how the desktop spent a release
+        believing nobody was signed in while the proxy had the address.
+        """
+
+        def header(*names: str) -> str:
+            for name in names:
+                value = (self.headers.get(name) or "").strip()
+                if value:
+                    return value
+            return ""
+
+        email = header("X-Auth-Request-Email", "X-Forwarded-Email", "X-Authentik-Email")
         if not email:
             return None
-        username = (self.headers.get("X-Auth-Request-User") or "").strip()
-        preferred = (self.headers.get("X-Auth-Request-Preferred-Username") or "").strip()
-        # oauth2-proxy forwards the user name, not the display name, so the most
-        # readable thing the app can honestly show is the account title-cased:
-        # dhunter -> Dhunter, d.hunter -> D Hunter.
+        username = header("X-Auth-Request-User", "X-Forwarded-User")
+        # An OIDC provider whose subject is hashed sends that hash in the user
+        # header. It identifies nobody in a way a person can read, so it is not
+        # kept as the account name; the address is the honest fallback there.
+        if len(username) == 64 and all(c in "0123456789abcdef" for c in username):
+            username = ""
+        preferred = header(
+            "X-Auth-Request-Preferred-Username", "X-Forwarded-Preferred-Username"
+        )
+        # preferred_username carries the person's display name when the provider
+        # is configured to send one (see deploy/sso/provision-authentik.py), and
+        # the bare handle otherwise. A name is already written the way its owner
+        # writes it; a handle is not, so only a single-word value is title-cased:
+        # dhunter -> Dhunter, d.hunter -> D Hunter, David Hunter -> unchanged.
         handle = preferred or username or email.split("@")[0]
-        words = [part for part in re.split(r"[._\-]+", handle) if part]
-        display = " ".join(word.capitalize() for word in words) or handle
-        return {
-            "email": email,
-            "name": display,
-            "username": username,
-            "groups": [
-                value.strip()
-                for value in (self.headers.get("X-Auth-Request-Groups") or "").split(",")
-                if value.strip()
-            ],
-        }
+        if " " in handle:
+            display = handle
+        else:
+            words = [part for part in re.split(r"[._\-]+", handle) if part]
+            display = " ".join(word.capitalize() for word in words) or handle
+        groups: list[str] = []
+        for value in header("X-Auth-Request-Groups", "X-Forwarded-Groups").split(","):
+            group = value.strip()
+            # A directory that lists a group twice (directly and through a
+            # parent) must not make the app claim the person is in it twice.
+            if group and group not in groups:
+                groups.append(group)
+        return {"email": email, "name": display, "username": username, "groups": groups}
 
     def query(self) -> dict:
         return dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query))

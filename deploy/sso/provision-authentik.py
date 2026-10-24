@@ -35,6 +35,15 @@ SIGNING_KEY = "1a438dc3-4b6a-4cd1-beb2-de8d56f1edc3"
 # id_token's email isn't verified. The estate's own mapping says True, because
 # the address comes from this directory and nowhere else. Use it, never the
 # default one.
+# The app greets people by name, and oauth2-proxy forwards preferred_username
+# as X-Auth-Request-Preferred-Username. Authentik's stock mapping points that
+# at the handle (`dhunter`), so Orion adds a mapping of its own that carries the
+# person's display name instead; the app falls back to the handle when a user
+# has no name set. Appended last so its key wins when the claims are merged.
+DISPLAY_MAPPING_NAME = "Orion display name"
+DISPLAY_MAPPING_EXPRESSION = (
+    'return {"preferred_username": request.user.name or request.user.username}'
+)
 EMAIL_MAPPING = "2f43cd0a-2de6-4443-9ee6-84db4d2a29f3"
 DEFAULT_EMAIL_MAPPING = "6c78e0c1-a6b3-4446-b945-26b6adeb2ebc"
 MAPPINGS = [
@@ -84,12 +93,41 @@ def find_provider():
     return None
 
 
+def ensure_display_mapping() -> str:
+    """Create (or repair) the scope mapping that carries the display name."""
+    for mapping in call("/propertymappings/provider/scope/?page_size=200")["results"]:
+        if mapping["name"] != DISPLAY_MAPPING_NAME:
+            continue
+        if mapping.get("expression") != DISPLAY_MAPPING_EXPRESSION:
+            call(
+                f"/propertymappings/provider/scope/{mapping['pk']}/",
+                "PATCH",
+                {"expression": DISPLAY_MAPPING_EXPRESSION},
+            )
+            print(f"display mapping repaired: pk={mapping['pk']}")
+        return mapping["pk"]
+    mapping = call(
+        "/propertymappings/provider/scope/",
+        "POST",
+        {
+            "name": DISPLAY_MAPPING_NAME,
+            "scope_name": "profile",
+            "description": "preferred_username carries the person's name, for Orion",
+            "expression": DISPLAY_MAPPING_EXPRESSION,
+        },
+    )
+    print(f"display mapping created: pk={mapping['pk']}")
+    return mapping["pk"]
+
+
 def find_app():
     for application in call("/core/applications/?page_size=200")["results"]:
         if application["slug"] == APP_SLUG:
             return application
     return None
 
+
+display_mapping = ensure_display_mapping()
 
 provider = find_provider()
 if provider is None:
@@ -103,7 +141,7 @@ if provider is None:
             "client_type": "confidential",
             "client_id": secrets.token_urlsafe(32),
             "client_secret": secrets.token_urlsafe(64),
-            "property_mappings": MAPPINGS,
+            "property_mappings": [*MAPPINGS, display_mapping],
             "redirect_uris": [
                 {
                     "matching_mode": "strict",
@@ -129,11 +167,14 @@ else:
     patch = {}
     if wanted:
         patch["grant_types"] = provider["grant_types"] + wanted
-    if DEFAULT_EMAIL_MAPPING in provider["property_mappings"]:
-        patch["property_mappings"] = [
-            EMAIL_MAPPING if mapping == DEFAULT_EMAIL_MAPPING else mapping
-            for mapping in provider["property_mappings"]
-        ]
+    mappings = [
+        EMAIL_MAPPING if mapping == DEFAULT_EMAIL_MAPPING else mapping
+        for mapping in provider["property_mappings"]
+    ]
+    if display_mapping not in mappings:
+        mappings.append(display_mapping)
+    if mappings != provider["property_mappings"]:
+        patch["property_mappings"] = mappings
     if patch:
         provider = call(f"/providers/oauth2/{provider['pk']}/", "PATCH", patch)
         print(f"  repaired: {sorted(patch)}")
@@ -158,11 +199,19 @@ else:
     print(f"application exists: slug={application['slug']}")
 
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
+# Re-running must not sign everybody out: keep the cookie secret that is
+# already in use, and only mint one when the file is new.
+existing_cookie = ""
+if os.path.exists(OUT):
+    for line in open(OUT, encoding="utf-8"):
+        match = re.match(r"^OAUTH2_PROXY_COOKIE_SECRET=(.+)$", line.strip())
+        if match:
+            existing_cookie = match.group(1)
 lines = [
     "# Written by provision-authentik.py — the Orion NAS OIDC client.",
     f"OAUTH2_PROXY_CLIENT_ID={provider['client_id']}",
     f"OAUTH2_PROXY_CLIENT_SECRET={provider['client_secret']}",
-    f"OAUTH2_PROXY_COOKIE_SECRET={secrets.token_urlsafe(32)[:32]}",
+    f"OAUTH2_PROXY_COOKIE_SECRET={existing_cookie or secrets.token_urlsafe(32)[:32]}",
 ]
 with open(OUT, "w", encoding="utf-8") as handle:
     handle.write("\n".join(lines) + "\n")
