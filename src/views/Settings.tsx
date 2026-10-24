@@ -178,10 +178,16 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
   const identity = system?.identity
   // The signed-in person's own space, matched the way the API matches it: by
   // the address the proxy forwarded, then by their account name.
+  // A shared space belongs to the household, not to whoever holds its address,
+  // so it is never "yours" — otherwise signing in as the household mailbox
+  // would offer to re-key the share everyone mounts.
   const mySpace =
     spaces.find(
-      (space) => space.email && space.email.toLowerCase() === (identity?.email ?? '').toLowerCase(),
-    ) ?? spaces.find((space) => space.slug === identity?.username)
+      (space) =>
+        !space.shared &&
+        space.email &&
+        space.email.toLowerCase() === (identity?.email ?? '').toLowerCase(),
+    ) ?? spaces.find((space) => !space.shared && space.slug === identity?.username)
   // Who may administer whom is decided by the API; the UI only mirrors it so a
   // member is not offered buttons the host would refuse.
   const canManageUsers = session.permissions.manageUsers
