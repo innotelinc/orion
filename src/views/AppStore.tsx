@@ -139,9 +139,17 @@ export function AppStore({ navigate }: AppStoreProps) {
       {app.available === false && app.unavailable ? (
         <p className="store-card__unavailable">{app.unavailable}</p>
       ) : null}
-      <div className="store-card__meta">
-        <code>{app.packages.join(' ')}</code> · <code>{app.unit}</code>
-      </div>
+      {app.packages.length || app.unit ? (
+        <div className="store-card__meta">
+          <code>{app.packages.join(' ') || '—'}</code> · <code>{app.unit || '—'}</code>
+        </div>
+      ) : app.hint ? (
+        // An entry that cannot run here names no package and no unit, because
+        // both would be a promise this container cannot keep.
+        <div className="store-card__meta">
+          <code>{app.hint}</code>
+        </div>
+      ) : null}
       <footer className="store-card__footer">
         <span className="store-category">{app.category}</span>
         <div className="store-card__actions">

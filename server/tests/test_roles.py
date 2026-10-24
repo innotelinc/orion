@@ -1070,7 +1070,7 @@ class TrashTestCase(unittest.TestCase):
 
 
 class AppCatalogueTestCase(unittest.TestCase):
-    """NFS here is userspace: the kernel server cannot run in a container."""
+    """NFS cannot run in this container, and the catalogue says so."""
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -1085,59 +1085,44 @@ class AppCatalogueTestCase(unittest.TestCase):
         self.person = self.api.create_space(
             {"name": "Ada Lovelace", "email": "ada@example.test", "role": "Member"}, self.admin
         )
-        spaces = self.api.load_spaces()
-        for space in spaces:
-            space["smb"] = True
-            space["shared"] = space["slug"] == "household"
-        self.api.save_spaces(spaces)
-        # The Unix account does not exist in a test, so the ids are stubbed.
-        self.api.space_owner_ids = lambda slug: (1200, 1300) if slug == "household" else (0, 0)
 
     def tearDown(self):
         self.temporary.cleanup()
 
-    def _blocks(self):
-        conf = self.api.render_ganesha_conf(self.api.load_spaces())
-        return conf, conf.split("EXPORT {")[1:]
+    def _nfs(self):
+        return next(app for app in self.api.apps_facts() if app["id"] == "nfs")
 
-    def test_the_entry_is_the_userspace_server(self):
-        entry = next(app for app in self.api.apps_facts() if app["id"] == "nfs")
-        self.assertIn("nfs-ganesha", entry["packages"])
-        self.assertEqual(entry["unit"], "nfs-ganesha.service")
+    def test_nfs_is_listed_as_unavailable_with_a_reason(self):
+        entry = self._nfs()
+        self.assertFalse(entry["available"])
+        self.assertIn("container", entry["unavailable"])
+        self.assertIn("SMB", entry["unavailable"])
+        # Nothing is claimed as installed: an empty package list would make
+        # dpkg_installed's "all of them are present" true by accident.
+        self.assertFalse(entry["installed"])
+        self.assertEqual(entry["packages"], [])
+        self.assertEqual(entry["state"], "not installed")
+
+    def test_installing_nfs_is_refused_rather_than_attempted(self):
+        with self.assertRaises(RuntimeError) as caught:
+            self.api.install_app("nfs")
+        self.assertIn("No NFS server can run", str(caught.exception))
+
+    def test_the_refusal_happens_before_anything_runs_as_root(self):
+        ran = []
+        self.api.run_root = lambda script, **kwargs: ran.append(script)
+        with self.assertRaises(RuntimeError):
+            self.api.install_app("nfs")
+        self.assertEqual(ran, [])
+
+    def test_the_host_remedy_is_on_the_card(self):
+        self.assertEqual(self._nfs()["hint"], "host: apt install nfs-kernel-server")
+
+    def test_smb_is_still_installable(self):
+        entry = next(app for app in self.api.apps_facts() if app["id"] == "smb")
         self.assertTrue(entry["available"])
-
-    def test_only_the_shared_space_is_exported_and_writes_as_its_owner(self):
-        conf, blocks = self._blocks()
-        household = next(block for block in blocks if 'Pseudo = "/household"' in block)
-        self.assertIn("Access_Type = RW", household)
-        self.assertIn("Squash = All_Squash", household)
-        self.assertIn("Anonymous_UID = 1200", household)
-        self.assertIn("Anonymous_GID = 1300", household)
-        # A personal share stays on SMB: NFSv4 with sys security cannot ask for
-        # a password, so exporting it would publish it.
-        self.assertNotIn('Pseudo = "/ada-lovelace"', conf)
-
-    def test_the_media_library_is_exported_read_only(self):
-        conf, blocks = self._blocks()
-        media = next(block for block in blocks if 'Pseudo = "/media"' in block)
-        self.assertIn("Access_Type = RO", media)
-        self.assertIn("Anonymous_UID = 65534", media)
-
-    def test_the_config_is_written_and_the_service_reloaded(self):
-        captured = {}
-
-        def record(script, **kwargs):
-            captured["script"] = script
-            captured["stdin"] = kwargs.get("stdin_text", "")
-            return ""
-
-        self.api.ganesha_installed = lambda: True
-        self.api.run_root = record
-        self.api.apply_nfs_exports()
-        self.assertIn("cat > ", captured["script"])
-        self.assertIn("ganesha.conf", captured["script"])
-        self.assertIn("reload-or-restart nfs-ganesha.service", captured["script"])
-        self.assertIn('Pseudo = "/household"', captured["stdin"])
+        self.assertEqual(entry["unavailable"], "")
+        self.assertIn("samba", entry["packages"])
 
 
 if __name__ == "__main__":

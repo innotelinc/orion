@@ -163,14 +163,19 @@ const trashPane = {
 }
 const appsText = await at('#/apps')
 const unitCards = window.document.querySelectorAll('.store-card').length
-// NFS is the userspace server, and it must be installable from the card.
+// NFS cannot run in this container, so its card has to say why, name where an
+// export would have to live, and must not offer an Install that can only fail.
+const nfsCard = [...window.document.querySelectorAll('.store-card')].find((card) =>
+  card.textContent.includes('NFS server'),
+)
 const appsCatalogue = {
-  userspace: appsText.includes('nfs-ganesha'),
-  installable: [...window.document.querySelectorAll('.store-card')]
-    .filter((card) => card.textContent.includes('NFS server'))
-    .some((card) =>
-      [...card.querySelectorAll('button')].some((button) => button.textContent.trim() === 'Install'),
-    ),
+  refusesNfs: Boolean(nfsCard) && nfsCard.textContent.includes('No NFS server can run'),
+  noInstall: nfsCard
+    ? ![...nfsCard.querySelectorAll('button')].some(
+        (button) => button.textContent.trim() === 'Install',
+      )
+    : false,
+  namesTheHost: Boolean(nfsCard) && nfsCard.textContent.includes('nfs-kernel-server'),
 }
 const storageText = await at('#/storage')
 const poolCards = window.document.querySelectorAll('.pool-card').length
@@ -289,8 +294,9 @@ const broken =
   summary.routes.serviceCards === 0 ||
   summary.routes.poolCards === 0 ||
   !summary.routes.servicesShowNginx ||
-  !summary.routes.appsCatalogue.userspace ||
-  !summary.routes.appsCatalogue.installable ||
+  !summary.routes.appsCatalogue.refusesNfs ||
+  !summary.routes.appsCatalogue.noInstall ||
+  !summary.routes.appsCatalogue.namesTheHost ||
   !summary.routes.generalShowsRuntime ||
   !summary.routes.aboutShowsBuild ||
   !summary.signOutOffered ||

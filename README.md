@@ -107,30 +107,34 @@ It runs as `orion-api.service` and is only reachable through nginx.
 ### Apps and SMB
 
 `POST /api/apps` installs one of the catalogue entries with apt: **SMB sharing**
-(`samba`), **NFS server** (`nfs-kernel-server`), **network discovery**
-(`avahi-daemon`) and **Windows discovery** (`wsdd`). Only catalogue ids are
-accepted — the endpoint does not take a package name from the browser.
+(`samba`), **network discovery** (`avahi-daemon`) and **Windows discovery**
+(`wsdd`). Only catalogue ids are accepted — the endpoint does not take a package
+name from the browser.
 
 Each entry also carries `available` and, when it is false, `unavailable`: the
 reason in a sentence, so a store card can say *cannot run here* before anybody
-presses install.
+presses install. **NFS server** is the entry that does: it names no package and
+no unit, and `install` is refused before anything runs as root.
 
-**NFS is served in userspace.** The kernel's `nfsd` is a filesystem rather than
-a daemon, and an unprivileged container cannot mount `/proc/fs/nfsd`, so
-`nfs-kernel-server` installs cleanly and then fails to start with it. **NFS
-server** therefore installs `nfs-ganesha` + `nfs-ganesha-vfs` — a userspace NFSv4
-server — and Orion writes `/etc/ganesha/ganesha.conf` from the registry:
+## NFS
 
-- the **household share** (a space with `shared: true`) read-write, all-squashed
-  onto that space's Unix account;
-- the **media library** read-only;
-- nothing else. NFSv4 with `sys` security trusts whatever uid a client claims, so
-exporting a person's private folder would publish it — those stay on SMB, which
-asks for a password.
+No NFS server runs inside this container, and the card says so rather than
+offering an install that would only fail. Both available servers were tried on
+the live instance:
 
-It listens on NFSv4/TCP 2049 only, so no rpcbind or mountd is involved. A Linux
-or macOS client mounts `mount -t nfs4 <nas-address>:/household /mnt`, and the
-config is rewritten whenever a shared space changes.
+- **Kernel `nfsd`** is a filesystem, not a daemon: an unprivileged container
+  cannot mount `/proc/fs/nfsd`, so `nfs-kernel-server` installs and then fails
+  with `proc-fs-nfsd.mount` (and `nfs-server.service` with it).
+- **`nfs-ganesha`**, the userspace NFSv4 server, installs and starts, listens on
+  2049 and accepts the mount, but its VFS backend reopens files with
+  `open_by_handle_at`, which this container's sandbox answers with `ENOSYS`. The
+  mount appears and then every operation returns `Remote I/O error`.
+
+SMB covers Linux and macOS clients as well, so those shares are the supported
+path. For native NFS, export the storage from the incus host that holds the
+dataset: `apt install nfs-kernel-server`, add the storage path to
+`/etc/exports`, and `exportfs -ra`. The container path is `/srv/storage` inside
+Orion; export the host's own dataset rather than the container's view of it.
 
 The service is `ProtectSystem=strict`, which is what keeps a bug here out of
 `/etc`. apt, `useradd` and `smbpasswd` genuinely need that access, so each change

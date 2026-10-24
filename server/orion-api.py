@@ -70,9 +70,6 @@ SPACE_PALETTE = ["#0a63ff", "#8b5cf6", "#10b981", "#f59e0b", "#f43f5e", "#06b6d4
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 SMB_CONF = Path("/etc/samba/smb.conf")
 SMB_CONF_BACKUP = Path("/etc/samba/smb.conf.orion-backup")
-# nfs-ganesha is a userspace NFSv4 server, which is the only kind an unprivileged
-# container can run: the kernel's nfsd is a filesystem it cannot mount.
-GANESHA_CONF = Path("/etc/ganesha/ganesha.conf")
 SMB_GROUP = "orion-nas"
 # One name for the box on the LAN, whatever protocol a client speaks.
 DISCOVERY_NAME = "orion-nas"
@@ -106,17 +103,30 @@ APP_CATALOGUE: list[dict] = [
         "unit": "smbd.service",
     },
     {
+        # Tried, twice, and both are refused by this container rather than by
+        # Orion: kernel nfsd needs a filesystem it cannot mount, and the
+        # userspace server needs open_by_handle_at, which the sandbox answers
+        # with ENOSYS — it installs, starts, lists on 2049, and then returns EIO
+        # for every client operation. A card that offered Install would be
+        # selling something that cannot work, so it says so instead.
         "id": "nfs",
         "name": "NFS server",
-        "tagline": "NFSv4 for Linux and macOS, no kernel nfsd needed",
+        "tagline": "Exports run on the incus host, not in this container",
         "description": (
-            "Installs nfs-ganesha, a userspace NFSv4 server — the kernel one cannot run in an "
-            "unprivileged container. It exports the household share read-write and the media "
-            "library read-only; personal shares stay on SMB, which can ask for a password."
+            "Kernel nfsd is a filesystem this container cannot mount, and nfs-ganesha, the "
+            "userspace server, needs open_by_handle_at — refused here, so every mount fails "
+            "with an I/O error. Linux and macOS mount the same shares over SMB; a native NFS "
+            "export has to run on the host that holds the storage."
         ),
         "category": "Sharing",
-        "packages": ["nfs-ganesha", "nfs-ganesha-vfs"],
-        "unit": "nfs-ganesha.service",
+        "packages": [],
+        "unit": "",
+        "available": False,
+        "unavailable": (
+            "No NFS server can run inside this container. Mount the SMB shares instead, or "
+            "export the storage from the incus host — README, NFS."
+        ),
+        "hint": "host: apt install nfs-kernel-server",
     },
     {
         "id": "discovery",
@@ -1515,7 +1525,6 @@ UNIT_PROCESS = {
     "avahi-daemon.service": "avahi-daemon",
     "nginx.service": "nginx",
     "orion-api.service": "python3",
-    "nfs-ganesha.service": "ganesha.nfsd",
 }
 
 
@@ -1557,13 +1566,14 @@ def app_by_id(app_id: str) -> dict:
 
 
 def app_facts(app: dict) -> dict:
-    installed = all(dpkg_installed(package) for package in app["packages"])
+    # An entry nothing here can run carries no packages on purpose: dpkg would
+    # report an empty list as installed.
+    available = bool(app.get("available", True))
+    unavailable = "" if available else str(app.get("unavailable", ""))
+    installed = bool(app["packages"]) and all(
+        dpkg_installed(package) for package in app["packages"]
+    )
     active, state = unit_state(app["unit"]) if installed else (False, "not installed")
-    # Nothing in the catalogue needs a capability this container lacks any more:
-    # NFS is userspace (ganesha), not the kernel nfsd. The fields stay because a
-    # store entry that cannot run here must be able to say so.
-    available = True
-    unavailable = ""
     return {
         "id": app["id"],
         "name": app["name"],
@@ -1577,6 +1587,7 @@ def app_facts(app: dict) -> dict:
         "state": state,
         "available": available,
         "unavailable": unavailable,
+        "hint": str(app.get("hint", "")),
     }
 
 
@@ -1636,6 +1647,9 @@ def run_root(script: str, stdin_text: str | None = None, timeout: int = APT_TIME
 
 def install_app(app_id: str) -> dict:
     app = app_by_id(app_id)
+    if not app.get("available", True):
+        # The button is already disabled; this is what the API says if pressed.
+        raise RuntimeError(str(app.get("unavailable") or f"{app['name']} cannot run here"))
     packages = " ".join(app["packages"])
     run_root(
         "set -e\n"
@@ -1644,9 +1658,6 @@ def install_app(app_id: str) -> dict:
         f"apt-get install -y --no-install-recommends {packages}\n"
         f"systemctl enable --now {app['unit']} >/dev/null 2>&1 || true\n"
     )
-    if app["id"] == "nfs":
-        # The export file is the server: nothing is served until it exists.
-        apply_nfs_exports()
     if app["id"] == "smb":
         # The package ships its own smb.conf; replace it with the shares Orion knows.
         apply_smb_conf()
@@ -1712,98 +1723,6 @@ def unix_user_exists(slug: str) -> bool:
 def samba_share_label(name: str) -> str:
     cleaned = re.sub(r"[\[\]\r\n/\\]", "", name).strip()
     return (cleaned or "Space")[:60]
-
-
-def ganesha_installed() -> bool:
-    return which("ganesha.nfsd")
-
-
-def space_owner_ids(slug: str) -> tuple[int, int]:
-    """The uid and gid an export writes as; nobody when the account is gone."""
-    if pwd is not None:
-        try:
-            record = pwd.getpwnam(slug)
-            return record.pw_uid, record.pw_gid
-        except KeyError:
-            pass
-    return 65534, 65534
-
-
-def render_ganesha_conf(spaces: list[dict]) -> str:
-    """The exports Orion serves over NFSv4.
-
-    Only what can be shared without a password belongs here. NFSv4 with `sys`
-    security trusts the uid the client claims, so exporting a person's private
-    folder would make it public: those stay on SMB, which asks for a credential.
-    The household share is all-squashed onto its owner — it is open to every
-    account already — and the media library is read-only.
-    """
-    lines = [
-        "# Managed by Orion. Rewritten whenever a shared space changes,",
-        "# so change what is exported in the desktop, not in this file.",
-        "NFS_CORE_PARAM {",
-        "    Protocols = 4;",
-        "    Enable_NLM = false;",
-        "    Enable_RQUOTA = false;",
-        "}",
-        "",
-        "NFSV4 {",
-        "    Grace_Period = 30;",
-        "}",
-        "",
-    ]
-    exports: list[tuple[str, Path, str, str, int, int]] = []
-    media = ROOT / "media"
-    if media.is_dir():
-        exports.append(("Media", media, "/media", "RO", 65534, 65534))
-    for space in spaces:
-        if not (space.get("smb") and space.get("shared")):
-            continue
-        slug = str(space["slug"])
-        directory = users_root() / slug
-        if not directory.is_dir():
-            continue
-        uid, gid = space_owner_ids(slug)
-        exports.append(
-            (str(space.get("name") or slug), directory, f"/{slug}", "RW", uid, gid)
-        )
-    for index, (label, path, pseudo, access, uid, gid) in enumerate(exports, start=1):
-        lines += [
-            f"# {label}",
-            "EXPORT {",
-            f"    Export_Id = {index};",
-            f'    Path = "{path}";',
-            f'    Pseudo = "{pseudo}";',
-            f"    Access_Type = {access};",
-            "    Squash = All_Squash;",
-            f"    Anonymous_UID = {uid};",
-            f"    Anonymous_GID = {gid};",
-            '    SecType = "sys";',
-            "    Protocols = 4;",
-            '    Transports = "TCP";',
-            "    FSAL {",
-            "        Name = VFS;",
-            "    }",
-            "}",
-            "",
-        ]
-    return "\n".join(lines)
-
-
-def apply_nfs_exports() -> None:
-    """Write the ganesha config and reload it, when ganesha is installed."""
-    if not ganesha_installed():
-        return
-    content = render_ganesha_conf(load_spaces())
-    run_root(
-        "set -e\n"
-        "install -d -m 0755 /etc/ganesha\n"
-        f"cat > {GANESHA_CONF}\n"
-        "systemctl enable nfs-ganesha.service >/dev/null 2>&1 || true\n"
-        "systemctl reload-or-restart nfs-ganesha.service >/dev/null 2>&1 || true\n",
-        stdin_text=content,
-        timeout=120,
-    )
 
 
 def render_smb_conf(spaces: list[dict]) -> str:
@@ -1881,9 +1800,7 @@ def render_smb_conf(spaces: list[dict]) -> str:
 
 
 def apply_smb_conf() -> None:
-    # Called by every change to the spaces registry, which is also every change
-    # to what NFS may export.
-    apply_nfs_exports()
+    # Called by every change to the spaces registry.
     if not samba_installed():
         return
     content = render_smb_conf(load_spaces())

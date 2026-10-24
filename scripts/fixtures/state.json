@@ -137,16 +137,17 @@
     {
       "id": "nfs",
       "name": "NFS server",
-      "tagline": "NFSv4 for Linux and macOS, no kernel nfsd needed",
-      "description": "Installs nfs-ganesha, a userspace NFSv4 server.",
+      "tagline": "Exports run on the incus host, not in this container",
+      "description": "Kernel nfsd needs a filesystem this container cannot mount.",
       "category": "Sharing",
-      "packages": ["nfs-ganesha", "nfs-ganesha-vfs"],
-      "unit": "nfs-ganesha.service",
+      "packages": [],
+      "unit": "",
       "installed": false,
       "active": false,
       "state": "not installed",
-      "available": true,
-      "unavailable": ""
+      "available": false,
+      "unavailable": "No NFS server can run inside this container. Mount the SMB shares instead, or export the storage from the incus host — README, NFS.",
+      "hint": "host: apt install nfs-kernel-server"
     },
     {
       "id": "discovery",

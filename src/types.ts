@@ -150,6 +150,8 @@ export interface AppEntry {
   available?: boolean
   /** Why, in a sentence, when `available` is false. */
   unavailable?: string
+  /** Where the thing actually runs, when this host cannot run it at all. */
+  hint?: string
 }
 
 export interface Disk {
