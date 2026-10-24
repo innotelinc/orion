@@ -516,6 +516,29 @@ class ShareClientTestCase(unittest.TestCase):
         self.assertEqual(facts["clients"], [])
         self.assertIsNone(facts["lastClient"])
 
+    def test_removing_the_person_forgets_their_machine(self):
+        self.api.smb_status = lambda: {
+            "tcons": {
+                "1": {"service": "Ada Lovelace", "machine": "DESKTOP-7Q4", "connected_at": "2026-10-24T09:15:00"}
+            }
+        }
+        self.api.share_client_map(self.api.load_spaces(), ttl=0)
+        self.api.delete_space(self.space["slug"], self.admin)
+        stored = self.root / ".orion" / "share-clients.json"
+        self.assertEqual(json.loads(stored.read_text())["shares"], {})
+
+    def test_unsharing_forgets_their_machine(self):
+        self.api.smb_status = lambda: {
+            "tcons": {
+                "1": {"service": "Ada Lovelace", "machine": "DESKTOP-7Q4", "connected_at": "2026-10-24T09:15:00"}
+            }
+        }
+        self.api.share_client_map(self.api.load_spaces(), ttl=0)
+        self.api.smb_status = lambda: {}
+        self.api.remove_share(self.space["slug"], self.admin)
+        stored = self.root / ".orion" / "share-clients.json"
+        self.assertEqual(json.loads(stored.read_text())["shares"], {})
+
 
 if __name__ == "__main__":
     unittest.main()

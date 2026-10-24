@@ -944,6 +944,8 @@ def delete_space(slug: str, session: dict | None = None) -> dict:
         if str(item.get("agency") or "") == slug:
             item["agency"] = ""
     save_spaces(remaining)
+    # The remembered machine belonged to a share that no longer exists.
+    forget_share_clients(slug)
     if samba_installed():
         apply_smb_conf()
     return space_facts(space, 0, session)
@@ -1080,6 +1082,7 @@ def remove_share(slug: str, session: dict | None = None) -> dict:
     drop_samba_account(str(space["slug"]))
     space["smb"] = False
     save_spaces(spaces)
+    forget_share_clients(str(space["slug"]))
     if samba_installed():
         apply_smb_conf()
     return space_facts(space, spaces.index(space), session)
@@ -1634,6 +1637,18 @@ def save_share_clients(entries: dict[str, dict]) -> None:
     temporary = SHARE_CLIENTS.with_name(SHARE_CLIENTS.name + ".tmp")
     temporary.write_text(json.dumps({"shares": entries}, indent=2) + "\n")
     temporary.replace(SHARE_CLIENTS)
+
+
+def forget_share_clients(slug: str) -> None:
+    """Drop the remembered machine when a share or its person goes away."""
+    entries = load_share_clients()
+    if entries.pop(slug, None) is None:
+        return
+    try:
+        save_share_clients(entries)
+    except OSError:
+        # Nothing is claimed about a share that is gone either way.
+        pass
 
 
 CLIENT_CACHE: dict = {"at": 0.0, "key": None, "value": {}}
