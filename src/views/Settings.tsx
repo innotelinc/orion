@@ -4,6 +4,7 @@ import {
   Globe,
   HardDrive,
   Info,
+  LogOut,
   Monitor,
   Moon,
   Network,
@@ -33,6 +34,18 @@ import type {
 interface SettingsProps {
   activeTab: SettingsTab
   onTabChange: (tab: SettingsTab) => void
+}
+
+// The provider's issuer, as deploy/sso/docker-compose.yml gives it to
+// oauth2-proxy: https://auth.cerulean.innotel.us/application/o/orion/
+const AUTH_END_SESSION =
+  'https://auth.cerulean.innotel.us/application/o/orion/end-session/'
+
+function signOut() {
+  // Two sessions have to end. Dropping only the proxy's cookie would sign this
+  // browser straight back in, because the provider still remembers it, so the
+  // redirect after /oauth2/sign_out is Authentik's own end-session flow.
+  window.location.assign(`/oauth2/sign_out?rd=${encodeURIComponent(AUTH_END_SESSION)}`)
 }
 
 const TABS: Array<{ id: SettingsTab; label: string; icon: typeof SlidersHorizontal; hint: string }> = [
@@ -501,11 +514,33 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                 {users.length === 0 ? <p className="dim">No login accounts were found.</p> : null}
               </SectionCard>
 
-              <SectionCard title="How access actually works" description="No invite flow is shown because this host has none.">
+              <SectionCard
+                title="How access actually works"
+                description="No invite flow is shown because this host has none."
+                footer={
+                  <>
+                    <span className="settings-dirty">
+                      {identity?.email ?? 'no edge session'}
+                    </span>
+                    {identity ? (
+                      <button
+                        type="button"
+                        className="button button--ghost"
+                        onClick={signOut}
+                      >
+                        <LogOut size={14} aria-hidden="true" />
+                        Sign out
+                      </button>
+                    ) : null}
+                  </>
+                }
+              >
                 <p className="settings-note">
                   People sign in at the edge. The proxy forwards the address in{' '}
                   <code>X-Auth-Request-Email</code>, which is the row marked “This session”. Adding
-                  someone means creating an Authentik account, not a local one here.
+                  someone means creating an Authentik account, not a local one here. Signing out ends
+                  the proxy cookie and the Authentik session behind it, so the next visit asks for a
+                  password again.
                 </p>
               </SectionCard>
             </div>
