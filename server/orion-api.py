@@ -1773,7 +1773,22 @@ MACHINE_NAME_MISS_TTL = 600.0
 # Names that are this server talking about itself. `nmblookup -A` answers for
 # 0.0.0.0, for loopback and for the box's own address with its own aliases, and
 # a share called "NAS" would be a confusing thing to call somebody's laptop.
-OWN_NAMES = {NETBIOS_NAME.upper(), DISCOVERY_NAME.upper(), DISCOVERY_NAME.replace("-", "").upper(), "NAS", WORKGROUP.upper()}
+OWN_NAMES = {
+    NETBIOS_NAME.upper(),
+    DISCOVERY_NAME.upper(),
+    DISCOVERY_NAME.replace("-", "").upper(),
+    "NAS",
+    WORKGROUP.upper(),
+}
+
+
+def own_name(name: str) -> bool:
+    """Is this one of the server's own names, or the LAN's browse master?"""
+    upper = str(name or "").strip().upper()
+    if not upper or upper == "__MSBROWSE__":
+        return True
+    # `ORION-NAS.LOCAL` is one of Samba's aliases, so compare the base name too.
+    return upper in OWN_NAMES or upper.split(".")[0] in OWN_NAMES
 # nmblookup waits ten seconds for a machine that does not answer, which is far
 # too long for a request; two is enough on a LAN and the miss is cached anyway.
 LOOKUP_TIMEOUT = 2
@@ -1797,7 +1812,7 @@ def netbios_name(address: str) -> str:
         if len(fields) < 2 or fields[1] != "<00>" or "<GROUP>" in fields:
             continue
         name = fields[0].strip().rstrip("$")
-        if not name or name.upper() in OWN_NAMES or name.upper() == "__MSBROWSE__":
+        if own_name(name):
             continue
         return name
     return ""
@@ -1820,9 +1835,9 @@ def resolver_name(address: str) -> str:
         if len(fields) < 2:
             continue
         name = fields[1].rstrip(".")
-        if not name or name == address or name.split(".")[0] == "localhost":
+        if not name or name == address or name.split(".")[0].lower() == "localhost":
             continue
-        if name.split(".")[0].upper() in OWN_NAMES:
+        if own_name(name):
             continue
         return name
     return ""

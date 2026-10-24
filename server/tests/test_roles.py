@@ -669,6 +669,14 @@ class MachineNameTestCase(unittest.TestCase):
         )
         self.assertEqual(self.api.netbios_name("127.0.0.1"), "")
 
+    def test_the_local_alias_is_not_a_client_name(self):
+        self.api.run_root = lambda *args, **kwargs: (
+            "Looking up status of 127.0.0.1\n"
+            "\tORION-NAS       <00> -         B <ACTIVE>\n"
+            "\tORION-NAS.LOCAL <00> -         B <ACTIVE>\n"
+        )
+        self.assertEqual(self.api.netbios_name("127.0.0.1"), "")
+
     def test_a_lookup_cannot_wait_ten_seconds(self):
         commands = []
         self.api.run_root = lambda script, **kwargs: commands.append(script) or ""
