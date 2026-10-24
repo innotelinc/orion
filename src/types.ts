@@ -111,6 +111,8 @@ export interface Space {
   signin?: string
   /** Slug of the agency admin this person is filed under, if any. */
   agency?: string
+  /** True when every account on the box may mount this share, not just its own. */
+  shared?: boolean
   /** Whether the session may remove or re-key this person. */
   manageable?: boolean
   /** Machines connected to this share right now, from smbstatus. */

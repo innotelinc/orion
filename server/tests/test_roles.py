@@ -830,5 +830,143 @@ class MachineNameTestCase(unittest.TestCase):
         self.assertEqual(calls, ["192.168.1.20"])
 
 
+class SharedSpaceTestCase(unittest.TestCase):
+    """A household share: every account may mount it, and it has an address.
+
+    Samba itself is stubbed here — what is asserted is the export this app
+    writes, the registry it keeps, and who is allowed to change either.
+    """
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name) / "storage"
+        self.root.mkdir()
+        self.api = load_api(self.root)
+        self.admin = self.api.session_facts(identity("boss@example.test"))
+        self.household = self.api.create_space(
+            {"name": "Household", "email": "", "role": "Member"}, self.admin
+        )
+        self.person = self.api.create_space(
+            {"name": "Ada Lovelace", "email": "ada@example.test", "role": "Member"}, self.admin
+        )
+        # create_space only makes a share when it is given a password; these
+        # tests are about what happens to a share that exists.
+        spaces = self.api.load_spaces()
+        for space in spaces:
+            space["smb"] = True
+        self.api.save_spaces(spaces)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def _section(self, label):
+        conf = self.api.render_smb_conf(self.api.load_spaces())
+        self.assertIn(f"[{label}]", conf)
+        return conf.split(f"[{label}]")[1].split("\n[")[0]
+
+    def _space(self, slug):
+        return next(space for space in self.api.load_spaces() if space["slug"] == slug)
+
+    # -- who may mount it --------------------------------------------------
+
+    def test_a_private_share_admits_only_its_owner(self):
+        section = self._section("Household")
+        self.assertIn("valid users = household", section)
+        self.assertNotIn("@orion-nas", section)
+        self.assertNotIn("force group", section)
+
+    def test_a_shared_share_admits_every_account(self):
+        facts = self.api.set_space_shared("household", True, self.admin)
+        self.assertTrue(facts["shared"])
+        section = self._section("Household")
+        self.assertIn("valid users = @orion-nas", section)
+        # Files created by one member must not become theirs alone.
+        self.assertIn("force group = orion-nas", section)
+        self.assertIn("directory mask = 2770", section)
+        # The other person's share is untouched.
+        self.assertIn("valid users = ada", self._section("Ada Lovelace"))
+
+    def test_the_folder_joins_the_group_so_it_can_be_written(self):
+        commands = []
+        self.api.samba_installed = lambda: True
+        self.api.run_root = lambda script, **kwargs: commands.append(script) or ""
+        self.api.set_space_shared("household", True, self.admin)
+        joined = "\n".join(commands)
+        self.assertIn("chgrp -R orion-nas", joined)
+        self.assertIn("chmod -R g+rwX", joined)
+        self.assertIn("-exec chmod g+s", joined)
+
+    def test_closing_it_returns_the_share_to_its_owner(self):
+        self.api.set_space_shared("household", True, self.admin)
+        facts = self.api.set_space_shared("household", False, self.admin)
+        self.assertFalse(facts["shared"])
+        self.assertIn("valid users = household", self._section("Household"))
+
+    def test_everyone_needs_a_share_to_join(self):
+        spaces = self.api.load_spaces()
+        for space in spaces:
+            if space["slug"] == "household":
+                space["smb"] = False
+        self.api.save_spaces(spaces)
+        with self.assertRaises(ValueError):
+            self.api.set_space_shared("household", True, self.admin)
+        self.assertFalse(self._space("household").get("shared"))
+
+    def test_removing_the_share_also_ends_everyones_access(self):
+        self.api.set_space_shared("household", True, self.admin)
+        facts = self.api.remove_share("household", self.admin)
+        self.assertFalse(facts["shared"])
+        self.assertFalse(facts["smb"])
+
+    def test_a_member_cannot_open_a_share_to_everyone(self):
+        session = self.api.session_facts(identity("ada@example.test"))
+        with self.assertRaises(PermissionError):
+            self.api.set_space_shared("household", True, session)
+        self.assertFalse(self._space("household").get("shared"))
+
+    def test_an_agency_admin_cannot_open_someone_elses_share(self):
+        self.api.create_space(
+            {"name": "Agency", "email": "agency@example.test", "role": "Agency admin"},
+            self.admin,
+        )
+        session = self.api.session_facts(identity("agency@example.test"))
+        with self.assertRaises(PermissionError):
+            self.api.set_space_shared("household", True, session)
+
+    # -- the address -------------------------------------------------------
+
+    def test_a_shared_space_takes_an_address(self):
+        facts = self.api.set_space_email("household", "Household@Example.Test", self.admin)
+        self.assertEqual(facts["email"], "household@example.test")
+        stored = json.loads((self.root / ".orion" / "spaces.json").read_text())
+        self.assertEqual(stored["spaces"][0]["email"], "household@example.test")
+
+    def test_a_shared_address_is_not_somebodys_personal_space(self):
+        self.api.set_space_shared("household", True, self.admin)
+        self.api.set_space_email("household", "household@example.test", self.admin)
+        # Otherwise signing in with the household mailbox would claim the share.
+        self.assertIsNone(self.api.space_by_email("household@example.test"))
+        self.assertEqual(self.api.space_by_email("ada@example.test")["slug"], self.person["slug"])
+
+    def test_an_address_can_be_cleared(self):
+        self.api.set_space_email("household", "household@example.test", self.admin)
+        self.assertEqual(self.api.set_space_email("household", "", self.admin)["email"], "")
+
+    def test_an_address_must_look_like_one(self):
+        for bad in ("not-an-address", "two words@example.test", "a@b"):
+            with self.assertRaises(ValueError):
+                self.api.set_space_email("household", bad, self.admin)
+
+    def test_an_address_belongs_to_only_one_space(self):
+        with self.assertRaises(ValueError):
+            self.api.set_space_email("household", "ada@example.test", self.admin)
+
+    def test_a_member_cannot_set_an_address(self):
+        session = self.api.session_facts(identity("ada@example.test"))
+        with self.assertRaises(PermissionError):
+            self.api.set_space_email("household", "other@example.test", session)
+        self.assertEqual(self._space("household").get("email", ""), "")
+
+
 if __name__ == "__main__":
     unittest.main()

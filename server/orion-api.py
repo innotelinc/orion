@@ -62,6 +62,9 @@ SHARE_CLIENTS = META / "share-clients.json"
 # A provider group that grants the same thing without editing a file here.
 PLATFORM_GROUP = "orion-platform-admins"
 SPACE_PALETTE = ["#0a63ff", "#8b5cf6", "#10b981", "#f59e0b", "#f43f5e", "#06b6d4"]
+# An address is a record, not a credential: it is what a space is filed under,
+# and what the desktop matches a signed-in person against.
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 SMB_CONF = Path("/etc/samba/smb.conf")
 SMB_CONF_BACKUP = Path("/etc/samba/smb.conf.orion-backup")
 SMB_GROUP = "orion-nas"
@@ -669,12 +672,15 @@ def save_platform_admins(emails: list[str]) -> None:
 
 
 def space_by_email(email: str) -> dict | None:
+    """The person's space for this address. A shared space has no owner, so a
+    household address never becomes somebody's own folder."""
     wanted = email.strip().lower()
     return next(
         (
             space
             for space in load_spaces()
-            if str(space.get("email") or "").strip().lower() == wanted
+            if not space.get("shared")
+            and str(space.get("email") or "").strip().lower() == wanted
         ),
         None,
     )
@@ -788,6 +794,8 @@ def space_facts(
         "role": normalise_role(space.get("role")),
         "agency": str(space.get("agency") or ""),
         "signin": str(space.get("signin") or ""),
+        # Shared with every account on the box rather than only its own.
+        "shared": bool(space.get("shared")),
         "manageable": can_manage_space(space, session) if session else False,
         "path": f"/{USERS_DIR_NAME}/{slug}",
         "usedBytes": folder_bytes(users_root() / slug),
@@ -842,7 +850,7 @@ def create_space(
         raise ValueError("give the person a name")
     if len(name) > 80:
         raise ValueError("keep names under 80 characters")
-    if email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+    if email and not EMAIL_PATTERN.match(email):
         raise ValueError("that email address does not look right")
 
     spaces = load_spaces()
@@ -1078,10 +1086,13 @@ def remove_share(slug: str, session: dict | None = None) -> dict:
         # Nothing to remove is not an error: the share is already gone, and the
         # registry is corrected either way.
         space["smb"] = False
+        space["shared"] = False
         save_spaces(spaces)
         return space_facts(space, spaces.index(space), session)
     drop_samba_account(str(space["slug"]))
     space["smb"] = False
+    # With no export left, "everyone" has nothing to open.
+    space["shared"] = False
     save_spaces(spaces)
     forget_share_clients(str(space["slug"]))
     if samba_installed():
@@ -1123,6 +1134,77 @@ def set_space_role(
                 # Same rule as removing the space: people keep their folders,
                 # but nobody is left filed under an administrator who is gone.
                 item["agency"] = ""
+    save_spaces(spaces)
+    return space_facts(space, spaces.index(space), session)
+
+
+def set_space_shared(slug: str, shared: object, session: dict | None = None) -> dict:
+    """Open a share to every account on the box, or close it again.
+
+    A shared space is the household folder: Samba admits the whole `orion-nas`
+    group instead of one account, and the folder is put in that group with group
+    write and the setgid bit, so what anybody creates stays writable by them all.
+    Closing it puts the export back to its owner; the files keep the permissions
+    they already have, because reading them was never what granted the mount.
+    """
+    session = session or session_facts(None)
+    spaces = load_spaces()
+    space = next((item for item in spaces if str(item["slug"]) == slug), None)
+    if space is None:
+        raise LookupError("that person has no space on this host")
+    if not can_manage_space(space, session):
+        raise PermissionError("you can only change shares in your own agency")
+    if not space.get("smb"):
+        raise ValueError("give this space a share with a password first")
+    wanted = bool(shared)
+    space["shared"] = wanted
+    save_spaces(spaces)
+    directory = users_root() / slug
+    if wanted and directory.is_dir() and samba_installed():
+        quoted = shlex.quote(str(directory))
+        run_root(
+            "set -e\n"
+            f"groupadd -f {SMB_GROUP}\n"
+            # Everything already there joins the group, so the first person
+            # through is not the only one who can write to it.
+            f"chgrp -R {SMB_GROUP} {quoted}\n"
+            f"chmod -R g+rwX {quoted}\n"
+            # New folders inherit the group rather than the creator's.
+            f"find {quoted} -type d -exec chmod g+s {{}} +\n",
+            timeout=300,
+        )
+    if samba_installed():
+        apply_smb_conf()
+    return space_facts(space, spaces.index(space), session)
+
+
+def set_space_email(slug: str, email: object, session: dict | None = None) -> dict:
+    """Record the address a space is filed under.
+
+    A record, not a credential: the desktop matches a signed-in person to their
+    space by it, and a shared space shows it as the household address. Nothing
+    is created in the directory here — a sign-in is issued with a password, and
+    changing an address is not the same act.
+    """
+    session = session or session_facts(None)
+    spaces = load_spaces()
+    space = next((item for item in spaces if str(item["slug"]) == slug), None)
+    if space is None:
+        raise LookupError("that person has no space on this host")
+    if not can_manage_space(space, session):
+        raise PermissionError("you can only change addresses in your own agency")
+    address = str(email or "").strip().lower()
+    if len(address) > 120:
+        raise ValueError("keep addresses under 120 characters")
+    if address and not EMAIL_PATTERN.match(address):
+        raise ValueError("that email address does not look right")
+    if address:
+        for other in spaces:
+            if str(other["slug"]) == slug:
+                continue
+            if str(other.get("email") or "").strip().lower() == address:
+                raise ValueError("another space already uses that address")
+    space["email"] = address
     save_spaces(spaces)
     return space_facts(space, spaces.index(space), session)
 
@@ -1538,17 +1620,30 @@ def render_smb_conf(spaces: list[dict]) -> str:
         if label.lower() in used:
             label = f"{label} ({slug})"
         used.add(label.lower())
+        shared = bool(space.get("shared"))
         lines += [
             f"[{label}]",
-            f"   comment = {label}'s space",
+            f"   comment = {label} ({'every account' if shared else 'private space'})",
             f"   path = {users_root() / slug}",
             "   browseable = yes",
             "   read only = no",
-            f"   valid users = {slug}",
-            "   create mask = 0660",
-            "   directory mask = 0770",
-            "",
+            # A household folder admits the whole group and keeps what anyone
+            # writes in that group, so the first person in does not become the
+            # only one who can edit it.
+            f"   valid users = {'@' + SMB_GROUP if shared else slug}",
         ]
+        if shared:
+            lines += [
+                f"   force group = {SMB_GROUP}",
+                "   create mask = 0660",
+                "   directory mask = 2770",
+            ]
+        else:
+            lines += [
+                "   create mask = 0660",
+                "   directory mask = 0770",
+            ]
+        lines.append("")
     return "\n".join(lines) + "\n"
 
 
@@ -2937,6 +3032,20 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self.body()
                 session = session_facts(self.identity())
                 space = set_space_role(slug, payload.get("role"), session)
+                self.json({"ok": True, "space": space})
+                return
+            if route.startswith("/api/users/") and route.endswith("/shared"):
+                slug = urllib.parse.unquote(route[len("/api/users/") :].removesuffix("/shared"))
+                payload = self.body()
+                session = session_facts(self.identity())
+                space = set_space_shared(slug, bool(payload.get("shared")), session)
+                self.json({"ok": True, "space": space})
+                return
+            if route.startswith("/api/users/") and route.endswith("/email"):
+                slug = urllib.parse.unquote(route[len("/api/users/") :].removesuffix("/email"))
+                payload = self.body()
+                session = session_facts(self.identity())
+                space = set_space_email(slug, str(payload.get("email") or ""), session)
                 self.json({"ok": True, "space": space})
                 return
             if route == "/api/share-clients":

@@ -59,6 +59,8 @@ The dev server proxies `/api` to `http://127.0.0.1:8099` by default; set
 | `POST /api/services` | start/stop/restart a unit |
 | `POST /api/apps` | install or remove a catalogue app with apt |
 | `POST /api/users/{slug}/password` | create or reset that space's Samba account and sign-in |
+| `POST /api/users/{slug}/shared` | let every account mount that share, or close it again |
+| `POST /api/users/{slug}/email` | record or clear the address a space is filed under |
 | `DELETE /api/users/{slug}/share` | remove the Samba account and share, keeping folder and sign-in |
 | `POST /api/me/space` | the signed-in person's own folder and share, named after their account |
 | `POST /api/me/password` | change the signed-in person's own share and sign-in password |
@@ -66,9 +68,9 @@ The dev server proxies `/api` to `http://127.0.0.1:8099` by default; set
 | `POST /api/users` | create a person's folder and record it in `.orion/spaces.json` |
 | `DELETE /api/users/{slug}` | move that folder to `.orion/trash` and forget it |
 
-The three user routes require an administrator, and the check is server-side:
-`POST`/`DELETE /api/users` and `POST /api/users/{slug}/password` answer 403 to
-a member, and an agency admin may only touch spaces filed under their own
+The `/api/users` routes require an administrator, and the check is server-side:
+creating, removing, re-keying, promoting and opening a share answer 403 to a
+member, and an agency admin may only touch spaces filed under their own
 agency — never their own, and never another agency admin. `GET /api/state`
 carries the answer (`session` plus a `manageable` flag per space) so the UI can
 mirror it instead of guessing.
@@ -116,6 +118,27 @@ and marks the space unshared; the folder, its files and any sign-in stay, and
 setting a password again brings the share back. The same dialog lists the two
 addresses a client can use — `\\ORION-NAS\<slug>` and
 `smb://orion-nas.local/<slug>` — and the username, each with a copy button.
+
+### A share everyone can mount
+
+A space is private by default: its export admits its own Samba account and
+nobody else's. **Everyone with an account can mount this**, in that same dialog,
+turns it into the household folder (`POST /api/users/{slug}/shared` with
+`{shared: true}`). The export then admits the whole `orion-nas` group instead of
+one account, and the folder is put in that group with group write and the setgid
+bit, so what one member creates is writable by the rest and new folders keep the
+group rather than the creator. Closing it flips the export back to its owner; the
+files keep the permissions they already have, because reading them was never what
+granted the mount. It is an admin action under the same rule as the rest: a
+platform admin anywhere, an agency admin only for its own people. Removing the
+share also ends it, since there is no export left for everyone to open.
+
+Every space also has an **Address** (`POST /api/users/{slug}/email` with
+`{email}`). It is a record, not a credential — nothing is created in the
+directory by setting it — and it is what Orion matches a signed-in person to
+their own space with, which is why a shared space's address (a household
+mailbox) never makes that address somebody's personal space. One address belongs
+to one space, and an empty value clears it.
 
 The same state is on the Files sidebar and the dashboard's **Shares** card, so a
 mount is visible without opening Settings: a green dot and *live* means Samba

@@ -134,6 +134,8 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
     setSpacePassword,
     nameShareClient,
     setSpaceRole,
+    setSpaceShared,
+    setSpaceEmail,
     pushToast,
     storage,
     refresh,
@@ -167,6 +169,9 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
   const [namingClient, setNamingClient] = useState<string | null>(null)
   const [clientName, setClientName] = useState('')
   const [clientError, setClientError] = useState<string | null>(null)
+  const [addressValue, setAddressValue] = useState('')
+  const [addressError, setAddressError] = useState<string | null>(null)
+  const [sharedError, setSharedError] = useState<string | null>(null)
   const smbApp = apps.find((app) => app.id === 'smb')
   // Declared before the rows below read it: a const used inside a callback
   // further up the body is a temporal-dead-zone crash at render, not a type error.
@@ -217,6 +222,28 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
     const result = await nameShareClient(address, '')
     setSpaceBusy(false)
     if (!result.ok) setClientError(result.error ?? 'The host refused that.')
+  }
+
+  const submitAddress = async () => {
+    if (!passwordTarget) return
+    setAddressError(null)
+    setSpaceBusy(true)
+    const result = await setSpaceEmail(passwordTarget.id, addressValue.trim())
+    setSpaceBusy(false)
+    if (!result.ok) {
+      setAddressError(result.error ?? 'The host refused that address.')
+      return
+    }
+    setAddressValue(addressValue.trim().toLowerCase())
+  }
+
+  const submitShared = async (next: boolean) => {
+    if (!passwordTarget) return
+    setSharedError(null)
+    setSpaceBusy(true)
+    const result = await setSpaceShared(passwordTarget.id, next)
+    setSpaceBusy(false)
+    if (!result.ok) setSharedError(result.error ?? 'The host refused that change.')
   }
 
   const submitPassword = async () => {
@@ -801,7 +828,11 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                           <span>{space.email || 'no address recorded'}</span>
                           <span>
                             {space.path} · {formatBytes(space.usedBytes)} stored
-                            {space.smb ? ` · \\ORION-NAS\\${space.slug} as ${space.slug}` : ''}
+                            {space.smb
+                              ? space.shared
+                                ? ` · \\ORION-NAS\\${space.slug} for every account`
+                                : ` · \\ORION-NAS\\${space.slug} as ${space.slug}`
+                              : ''}
                             {space.signin ? ` · signs in as ${space.signin}` : ''}
                             {space.agency
                               ? ` · under ${spaces.find((item) => item.slug === space.agency)?.name ?? space.agency}`
@@ -827,6 +858,9 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                               setPasswordTarget(space)
                               setPasswordValue('')
                               setPasswordError(null)
+                              setAddressValue(space.email ?? '')
+                              setAddressError(null)
+                              setSharedError(null)
                             }}
                           >
                             <KeyRound size={13} aria-hidden="true" />
@@ -1425,9 +1459,11 @@ systemctl reload nginx`}
         title={passwordTarget?.smb ? 'Change SMB password' : 'Give this space SMB access'}
         description={
           passwordTarget
-            ? passwordTarget.signin
-              ? `${passwordTarget.name} signs in to the desktop and to \\ORION-NAS\\${passwordTarget.slug} as “${passwordTarget.slug}”, with this one password.`
-              : `Windows asks for “${passwordTarget.slug}”, not an Authentik login, when it opens \\ORION-NAS\\${passwordTarget.slug}.`
+            ? passwordTarget.shared
+              ? `${passwordTarget.name} is open to every account on this box: each person mounts \\ORION-NAS\\${passwordTarget.slug} as themselves, so their own space's password opens it.`
+              : passwordTarget.signin
+                ? `${passwordTarget.name} signs in to the desktop and to \\ORION-NAS\\${passwordTarget.slug} as “${passwordTarget.slug}”, with this one password.`
+                : `Windows asks for “${passwordTarget.slug}”, not an Authentik login, when it opens \\ORION-NAS\\${passwordTarget.slug}.`
             : undefined
         }
         size="sm"
@@ -1512,6 +1548,32 @@ systemctl reload nginx`}
                     : 'It appears here within a few seconds of a client mounting it — reload this page after trying the path above.'}
               </span>
             </div>
+          </div>
+        ) : null}
+        {passwordTarget?.smb ? (
+          // Who may open it is the difference between a person's folder and the
+          // household one, so it belongs beside the paths and the connection.
+          <div className="share-access">
+            <Switch
+              checked={Boolean(passwordTarget.shared)}
+              disabled={spaceBusy || passwordTarget.manageable === false}
+              onChange={(next) => void submitShared(next)}
+              label={
+                passwordTarget.shared
+                  ? 'Everyone with an account can mount this'
+                  : `Only “${passwordTarget.slug}” can mount this`
+              }
+              description={
+                passwordTarget.shared
+                  ? 'Every space opens it as itself, so nobody has to hand over their password.'
+                  : `Turn this on for a household folder: any account on the box could then open \\ORION-NAS\\${passwordTarget.slug}.`
+              }
+            />
+            {sharedError ? (
+              <span className="field__error" role="alert">
+                {sharedError}
+              </span>
+            ) : null}
           </div>
         ) : null}
         {passwordTarget?.smb && machines.length ? (
@@ -1606,6 +1668,50 @@ systemctl reload nginx`}
               <span className="share-clients__hint">
                 The name is only a label: the address stays underneath, and nothing about the
                 connection changes.
+              </span>
+            )}
+          </div>
+        ) : null}
+        {passwordTarget && passwordTarget.manageable !== false ? (
+          <div className="field">
+            <label htmlFor="space-address">Address</label>
+            <div className="field__row">
+              <input
+                id="space-address"
+                className="input"
+                type="email"
+                autoComplete="off"
+                value={addressValue}
+                onChange={(event) => {
+                  setAddressValue(event.target.value)
+                  setAddressError(null)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void submitAddress()
+                }}
+                placeholder="household@example.com"
+                aria-invalid={Boolean(addressError)}
+              />
+              <button
+                type="button"
+                className="button button--sm"
+                disabled={
+                  spaceBusy || addressValue.trim().toLowerCase() === passwordTarget.email
+                }
+                onClick={() => void submitAddress()}
+              >
+                Save
+              </button>
+            </div>
+            {addressError ? (
+              <span className="field__error" role="alert">
+                {addressError}
+              </span>
+            ) : (
+              <span className="field__hint">
+                A label, not a sign-in: Orion files this space under it, and matches a
+                signed-in person to their own space by it. A shared space uses it as the
+                household address.
               </span>
             )}
           </div>

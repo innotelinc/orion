@@ -178,6 +178,10 @@ const renameButton = window.document.querySelector('.share-clients__row button')
 renameButton?.click()
 await new Promise((resolve) => setTimeout(resolve, 400))
 const nameInput = window.document.querySelector('.share-clients__form input')
+// Who may mount the share, and the address it is filed under, are decided in
+// this dialog too; the fixture's space is a household one, opened to everyone.
+const accessSwitch = window.document.querySelector('.share-access [role="switch"]')
+const addressField = window.document.querySelector('#space-address')
 const shareDialog = {
   opened: Boolean(shareButton),
   namesTheClient: shareText.includes('DESKTOP-7Q4'),
@@ -185,6 +189,9 @@ const shareDialog = {
   shareRows,
   showsAddress: shareText.includes('192.168.1.20'),
   offersName: Boolean(renameButton) && Boolean(nameInput),
+  whoCanMount: Boolean(accessSwitch),
+  openToEveryone: accessSwitch?.getAttribute('aria-checked') === 'true',
+  addressValue: addressField?.value ?? '',
 }
 await at('#/')
 
@@ -260,6 +267,9 @@ const broken =
   Object.values(summary.routes.settingsTabs).some((tab) => tab.crashed || tab.chars < 200) ||
   !summary.routes.shareDialog.namesTheClient ||
   !summary.routes.shareDialog.claimsConnected ||
+  !summary.routes.shareDialog.whoCanMount ||
+  !summary.routes.shareDialog.openToEveryone ||
+  summary.routes.shareDialog.addressValue !== 'ada@example.test' ||
   summary.routes.shareDialog.shareRows === 0 ||
   !summary.routes.shareDialog.showsAddress ||
   !summary.routes.shareDialog.offersName ||

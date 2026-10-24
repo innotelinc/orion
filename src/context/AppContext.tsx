@@ -94,6 +94,8 @@ interface AppContextValue {
   setSpacePassword: (id: string, password: string) => Promise<ActionResult>
   nameShareClient: (address: string, name: string) => Promise<ActionResult>
   setSpaceRole: (id: string, role: UserRole) => Promise<ActionResult>
+  setSpaceShared: (id: string, shared: boolean) => Promise<ActionResult>
+  setSpaceEmail: (id: string, email: string) => Promise<ActionResult>
   removeShare: (id: string) => Promise<ActionResult>
   createMySpace: (password: string) => Promise<ActionResult>
   changeMyPassword: (password: string) => Promise<ActionResult>
@@ -477,6 +479,54 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [loadState, pushToast],
   )
 
+  const setSpaceShared = useCallback(
+    async (id: string, shared: boolean): Promise<ActionResult> => {
+      try {
+        const { space } = await api.setSpaceShared(id, shared)
+        await loadState()
+        pushToast({
+          title: shared ? `${space.name} is open to everyone` : `${space.name} is private again`,
+          description: shared
+            ? 'Every account on this box can mount it, and files anyone writes stay writable for them all.'
+            : `Only “${space.slug}” can mount it now. Every file stays where it is.`,
+          tone: 'success',
+        })
+        return { ok: true }
+      } catch (failure) {
+        return {
+          ok: false,
+          error:
+            failure instanceof Error ? failure.message : 'The host refused to change that share.',
+        }
+      }
+    },
+    [loadState, pushToast],
+  )
+
+  const setSpaceEmail = useCallback(
+    async (id: string, email: string): Promise<ActionResult> => {
+      try {
+        const { space } = await api.setSpaceEmail(id, email)
+        await loadState()
+        pushToast({
+          title: space.email ? `Address set to ${space.email}` : 'Address cleared',
+          description: space.email
+            ? `${space.name} is filed under it. This is a label, not a sign-in.`
+            : `${space.name} no longer has an address recorded.`,
+          tone: 'success',
+        })
+        return { ok: true }
+      } catch (failure) {
+        return {
+          ok: false,
+          error:
+            failure instanceof Error ? failure.message : 'The host refused that address.',
+        }
+      }
+    },
+    [loadState, pushToast],
+  )
+
   const createMySpace = useCallback(
     async (password: string): Promise<ActionResult> => {
       try {
@@ -688,6 +738,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setSpacePassword,
       nameShareClient,
       setSpaceRole,
+      setSpaceShared,
+      setSpaceEmail,
       removeShare,
       createMySpace,
       changeMyPassword,
@@ -722,6 +774,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setSpacePassword,
       nameShareClient,
       setSpaceRole,
+      setSpaceShared,
+      setSpaceEmail,
       removeShare,
       createMySpace,
       changeMyPassword,
