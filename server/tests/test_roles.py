@@ -276,6 +276,35 @@ class RoleTestCase(unittest.TestCase):
         self.api.delete_space(space["slug"], self.admin)
         self.assertEqual(disabled, ["departing"])
 
+    def test_the_directory_client_imports_the_modules_it_calls(self):
+        # A missing `import urllib.request` is invisible until a real host tries
+        # to provision, and then it is a 500 halfway through creating a person.
+        self.assertTrue(hasattr(self.api.urllib, "request"))
+        self.assertTrue(hasattr(self.api.urllib, "error"))
+
+    def test_create_signin_joins_the_group_through_the_group_endpoint(self):
+        calls = []
+
+        def fake_call(path, method="GET", body=None):
+            calls.append((method, path, body))
+            if path.startswith("/core/groups/?name="):
+                return {"results": [{"pk": "group-uuid", "name": "orion-users"}]}
+            if path.startswith("/core/users/?username="):
+                # An account left behind by an earlier removal.
+                return {"results": [{"pk": 99, "username": "orphan"}]}
+            if path == "/core/users/":
+                return {"pk": 7, "username": "orphan"}
+            return {}
+
+        self.api.directory_call = fake_call
+        self.assertEqual(self.api.create_signin("orphan", "Orphaned", "o@example.test", "a-long-password"), "orphan")
+        methods = [(method, path) for method, path, _ in calls]
+        self.assertIn(("DELETE", "/core/users/99/"), methods)
+        self.assertIn(("POST", "/core/groups/group-uuid/add_user/"), methods)
+        self.assertIn(("POST", "/core/users/7/set_password/"), methods)
+        # The credential may not edit users, so nothing here may PATCH one.
+        self.assertNotIn("PATCH", [method for method, _ in methods])
+
     def test_directory_settings_read_the_host_file_and_normalise_the_url(self):
         credentials = self.root / "sso-admin.env"
         credentials.write_text(

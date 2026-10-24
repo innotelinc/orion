@@ -31,6 +31,7 @@ import time
 import unicodedata
 import urllib.error
 import urllib.parse
+import urllib.request
 from collections import deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
