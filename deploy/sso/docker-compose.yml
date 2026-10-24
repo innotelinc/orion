@@ -1,0 +1,39 @@
+# Orion's sign-in, on the edge host beside NPM.
+#
+# NPM forwards nas.innotel.us here; this proxy authenticates against Authentik
+# and only then reaches the container on 192.168.1.89:80 (which refuses every
+# source except this host). The identity arrives at the API as
+# X-Auth-Request-Email, which is what Settings → Security displays.
+services:
+  orion-sso:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.8.2
+    container_name: orion-sso
+    restart: unless-stopped
+    env_file:
+      - orion-sso.env
+    ports:
+      # Published on the LAN address the edge forwards to, and nowhere else.
+      - "192.168.1.71:14016:4180"
+    command:
+      - --provider=oidc
+      - --oidc-issuer-url=https://auth.cerulean.innotel.us/application/o/orion/
+      - --oidc-groups-claim=groups
+      - --scope=openid email profile groups
+      - --email-domain=*
+      - --allowed-group=Incus
+      - --allowed-group=Cerulean
+      - --allowed-group=authentik Admins
+      - --skip-provider-button=true
+      # Uptime probes carry no data, so /health stays open; everything else,
+      # the API included, needs a session.
+      - --skip-auth-route=^/health$
+      - --cookie-secure=true
+      - --cookie-samesite=lax
+      - --whitelist-domain=.innotel.us
+      - --reverse-proxy=true
+      - --set-xauthrequest=true
+      - --pass-user-headers=true
+      - --upstream=http://192.168.1.89:80
+      - --http-address=0.0.0.0:4180
+      - --redirect-url=https://nas.innotel.us/oauth2/callback
+      - --silence-ping-logging=true
