@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react'
+import { useState, type CSSProperties, type ReactNode } from 'react'
 import {
   Check,
   Globe,
@@ -13,11 +13,14 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sun,
+  Trash2,
+  UserPlus,
   Users,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { classNames, formatBytes } from '../lib/format'
 import { Avatar } from '../components/ui/Avatar'
+import { Modal } from '../components/ui/Modal'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Segmented } from '../components/ui/Segmented'
 import { StatusBadge } from '../components/ui/StatusBadge'
@@ -26,8 +29,10 @@ import type {
   Accent,
   Density,
   SettingsTab,
+  Space,
   ThemeMode,
   TimeFormat,
+  UserRole,
   Wallpaper,
 } from '../types'
 
@@ -52,7 +57,7 @@ const TABS: Array<{ id: SettingsTab; label: string; icon: typeof SlidersHorizont
   { id: 'general', label: 'General', icon: SlidersHorizontal, hint: 'Host & build' },
   { id: 'appearance', label: 'Appearance', icon: Palette, hint: 'Theme & wallpaper' },
   { id: 'network', label: 'Network', icon: Network, hint: 'Address & DNS' },
-  { id: 'users', label: 'Users', icon: Users, hint: 'Accounts' },
+  { id: 'users', label: 'Users', icon: Users, hint: 'Spaces' },
   { id: 'security', label: 'Security', icon: ShieldCheck, hint: 'Access' },
   { id: 'about', label: 'About', icon: Info, hint: 'Version & support' },
 ]
@@ -111,12 +116,57 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
     system,
     services,
     users,
+    spaces,
+    addSpace,
+    removeSpace,
+    pushToast,
     storage,
     refresh,
     resetPreferences,
     loading,
   } = useApp()
   const tab = activeTab
+  const [spaceForm, setSpaceForm] = useState({ name: '', email: '', role: 'Member' as UserRole })
+  const [spaceError, setSpaceError] = useState<string | null>(null)
+  const [spaceOpen, setSpaceOpen] = useState(false)
+  const [removeSpaceTarget, setRemoveSpaceTarget] = useState<Space | null>(null)
+  const [spaceBusy, setSpaceBusy] = useState(false)
+
+  const submitSpace = async () => {
+    const name = spaceForm.name.trim()
+    if (name.length < 2) {
+      setSpaceError('Give the person a name.')
+      return
+    }
+    setSpaceBusy(true)
+    const result = await addSpace({
+      name,
+      email: spaceForm.email.trim(),
+      role: spaceForm.role,
+    })
+    setSpaceBusy(false)
+    if (!result.ok) {
+      setSpaceError(result.error ?? 'Could not create that space.')
+      return
+    }
+    setSpaceOpen(false)
+    setSpaceForm({ name: '', email: '', role: 'Member' })
+  }
+
+  const confirmRemoveSpace = async () => {
+    if (!removeSpaceTarget) return
+    setSpaceBusy(true)
+    const result = await removeSpace(removeSpaceTarget.id)
+    setSpaceBusy(false)
+    if (!result.ok) {
+      pushToast({
+        title: 'Could not remove that space',
+        description: result.error,
+        tone: 'error',
+      })
+    }
+    setRemoveSpaceTarget(null)
+  }
   const version = system?.version
   const network = system?.network
   const identity = system?.identity
@@ -480,8 +530,69 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
           {tab === 'users' ? (
             <div className="settings-stack">
               <SectionCard
-                title="Accounts"
-                description="Unix accounts with a login shell, plus the identity the edge forwarded for this session. Accounts are managed with usermod, not from the browser."
+                title="Spaces"
+                description="One folder per person on the storage volume. A space is a folder, not a session: adding someone creates their folder, and removing them moves it to Trash."
+                footer={
+                  <>
+                    <span className="settings-dirty">
+                      {spaces.length} {spaces.length === 1 ? 'space' : 'spaces'} ·{' '}
+                      {formatBytes(spaces.reduce((sum, space) => sum + space.usedBytes, 0))} stored
+                    </span>
+                    <button
+                      type="button"
+                      className="button button--primary"
+                      onClick={() => {
+                        setSpaceError(null)
+                        setSpaceOpen(true)
+                      }}
+                    >
+                      <UserPlus size={14} aria-hidden="true" />
+                      New space
+                    </button>
+                  </>
+                }
+              >
+                {spaces.length ? (
+                  <ul className="user-list">
+                    {spaces.map((space) => (
+                      <li key={space.id} className="user-row">
+                        <Avatar name={space.name} color={space.color} size="md" />
+                        <div className="user-row__copy">
+                          <strong>{space.name}</strong>
+                          <span>{space.email || 'no address recorded'}</span>
+                          <span>
+                            {space.path} · {formatBytes(space.usedBytes)} stored
+                          </span>
+                        </div>
+                        <span className={`role-badge role-badge--${space.role.toLowerCase()}`}>
+                          {space.role}
+                        </span>
+                        <span className="user-row__active">
+                          {space.createdAt ? `added ${space.createdAt.slice(0, 10)}` : 'available'}
+                        </span>
+                        <button
+                          type="button"
+                          className="icon-button icon-button--sm user-row__remove"
+                          aria-label={`Remove ${space.name}`}
+                          title={`Remove ${space.name}`}
+                          onClick={() => setRemoveSpaceTarget(space)}
+                        >
+                          <Trash2 size={14} aria-hidden="true" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="dim">
+                    No spaces yet. A new one appears under <code>Users</code> in Files, and can hold
+                    anything that person uploads.
+                  </p>
+                )}
+              </SectionCard>
+
+              <SectionCard
+                title="Host accounts"
+                description="Unix accounts with a login shell, plus the identity the edge forwarded for this session. These are facts about the container; they change with usermod, not from here."
                 footer={
                   <>
                     <span className="settings-dirty">{users.length} accounts</span>
@@ -516,7 +627,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
 
               <SectionCard
                 title="How access actually works"
-                description="No invite flow is shown because this host has none."
+                description="A space organises files; it does not grant access."
                 footer={
                   <>
                     <span className="settings-dirty">
@@ -537,10 +648,11 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
               >
                 <p className="settings-note">
                   People sign in at the edge. The proxy forwards the address in{' '}
-                  <code>X-Auth-Request-Email</code>, which is the row marked “This session”. Adding
-                  someone means creating an Authentik account, not a local one here. Signing out ends
-                  the proxy cookie and the Authentik session behind it, so the next visit asks for a
-                  password again.
+                  <code>X-Auth-Request-Email</code>, which is the row marked “This session”, and
+                  every signed-in visitor sees the same desktop — so a space is a shared folder,
+                  not a private one. Adding someone means creating an Authentik account there.
+                  Signing out ends the proxy cookie and the Authentik session behind it, so the
+                  next visit asks for a password again.
                 </p>
               </SectionCard>
             </div>
@@ -705,6 +817,118 @@ systemctl reload nginx`}
           ) : null}
         </div>
       </div>
+
+      <Modal
+        open={spaceOpen}
+        onClose={() => setSpaceOpen(false)}
+        title="New space"
+        description="Creates a folder on the storage volume. Nothing is asked of the host's own accounts."
+        size="sm"
+        footer={
+          <>
+            <button type="button" className="button" onClick={() => setSpaceOpen(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={spaceBusy || !spaceForm.name.trim()}
+              onClick={() => void submitSpace()}
+            >
+              <UserPlus size={14} aria-hidden="true" />
+              Create space
+            </button>
+          </>
+        }
+      >
+        <div className="field">
+          <label htmlFor="space-name">Name</label>
+          <input
+            id="space-name"
+            className="input"
+            data-autofocus
+            value={spaceForm.name}
+            onChange={(event) => {
+              setSpaceForm((previous) => ({ ...previous, name: event.target.value }))
+              setSpaceError(null)
+            }}
+            placeholder="e.g. Ada Lovelace"
+            aria-invalid={Boolean(spaceError)}
+          />
+          <span className="field__hint">The folder is named from this: ada-lovelace.</span>
+        </div>
+        <div className="field">
+          <label htmlFor="space-email">Email (optional)</label>
+          <input
+            id="space-email"
+            className="input"
+            type="email"
+            value={spaceForm.email}
+            onChange={(event) => {
+              setSpaceForm((previous) => ({ ...previous, email: event.target.value }))
+              setSpaceError(null)
+            }}
+            placeholder="who the folder belongs to"
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="space-role">Label</label>
+          <select
+            id="space-role"
+            className="input"
+            value={spaceForm.role}
+            onChange={(event) =>
+              setSpaceForm((previous) => ({ ...previous, role: event.target.value as UserRole }))
+            }
+          >
+            {(['Owner', 'Admin', 'Member', 'Guest'] as UserRole[]).map((role) => (
+              <option key={role} value={role}>
+                {role}
+              </option>
+            ))}
+          </select>
+          <span className="field__hint">A label for the people sharing this box, not a privilege.</span>
+        </div>
+        {spaceError ? (
+          <span className="field__error" role="alert">
+            {spaceError}
+          </span>
+        ) : null}
+      </Modal>
+
+      <Modal
+        open={Boolean(removeSpaceTarget)}
+        onClose={() => setRemoveSpaceTarget(null)}
+        title={removeSpaceTarget ? `Remove ${removeSpaceTarget.name}?` : 'Remove space?'}
+        description="The folder and everything in it move to Trash. Nothing is unlinked."
+        size="sm"
+        footer={
+          <>
+            <button type="button" className="button" onClick={() => setRemoveSpaceTarget(null)}>
+              Keep it
+            </button>
+            <button
+              type="button"
+              className="button button--danger"
+              disabled={spaceBusy}
+              onClick={() => void confirmRemoveSpace()}
+            >
+              <Trash2 size={14} aria-hidden="true" />
+              Move to Trash
+            </button>
+          </>
+        }
+      >
+        {removeSpaceTarget ? (
+          <div className="danger-note">
+            <Trash2 size={17} aria-hidden="true" />
+            <span>
+              <code>{removeSpaceTarget.path}</code> · {formatBytes(removeSpaceTarget.usedBytes)} of
+              files
+            </span>
+          </div>
+        ) : null}
+      </Modal>
     </section>
   )
 }

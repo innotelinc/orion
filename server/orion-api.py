@@ -5,8 +5,10 @@ The desktop used to invent its files, disks and counters in the browser. This
 service replaces that: one JSON surface over the container it runs in.
 
     /srv/storage                  the data volume the Files app browses
+    /srv/storage/Users            one folder per person, managed in Settings
     /srv/storage/.orion/trash     "delete" moves here, never unlinks
     /srv/storage/.orion/starred   per-path star flags
+    /srv/storage/.orion/spaces    who the Users folders belong to
 
 Read-only facts come from /proc, /sys and systemd; the only mutating calls are
 the file operations and service start/stop/restart, and both are restricted to
@@ -26,6 +28,7 @@ import socket
 import subprocess
 import threading
 import time
+import unicodedata
 import urllib.parse
 from collections import deque
 from http import HTTPStatus
@@ -36,6 +39,10 @@ ROOT = Path(os.environ.get("ORION_ROOT", "/srv/storage")).resolve()
 META = ROOT / ".orion"
 TRASH = META / "trash"
 STARS = META / "starred.json"
+SPACES = META / "spaces.json"
+USERS_DIR_NAME = "Users"
+SPACE_ROLES = ("Owner", "Admin", "Member", "Guest")
+SPACE_PALETTE = ["#0a63ff", "#8b5cf6", "#10b981", "#f59e0b", "#f43f5e", "#06b6d4"]
 VERSION_FILE = Path(os.environ.get("ORION_VERSION_FILE", "/opt/orion/version.json"))
 BIND = os.environ.get("ORION_BIND", "127.0.0.1")
 PORT = int(os.environ.get("ORION_PORT", "8099"))
@@ -506,6 +513,153 @@ def users_facts(identity: dict | None) -> list[dict]:
     return users
 
 
+# ------------------------------------------------------------------ spaces
+#
+# A person is a folder. There is no sign-in to grant, so "adding a user" is
+# creating that folder and recording whose it is; "removing" one moves it to
+# Trash like any other delete. Everything lives inside the storage volume, which
+# is the only place this service writes.
+
+
+def users_root() -> Path:
+    return ROOT / USERS_DIR_NAME
+
+
+def slug_for(name: str) -> str:
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()).strip("-")[:32]
+    return slug or "person"
+
+
+def load_spaces() -> list[dict]:
+    try:
+        payload = json.loads(SPACES.read_text())
+    except (OSError, ValueError):
+        return []
+    items = payload.get("spaces") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict) and str(item.get("slug", "")).strip()]
+
+
+def save_spaces(spaces: list[dict]) -> None:
+    """Write the whole list at once: a crash must not leave half a registry."""
+    META.mkdir(parents=True, exist_ok=True)
+    temporary = SPACES.with_name(SPACES.name + ".tmp")
+    temporary.write_text(json.dumps({"spaces": spaces}, indent=2) + "\n")
+    temporary.replace(SPACES)
+
+
+def folder_bytes(directory: Path, budget: int = 20_000) -> int:
+    """Bytes under one folder, capped so a huge tree cannot stall a request."""
+    total = 0
+    pending = [directory]
+    while pending and budget > 0:
+        following = []
+        for current in pending:
+            try:
+                entries = list(os.scandir(current))
+            except OSError:
+                continue
+            for entry in entries:
+                if budget <= 0:
+                    break
+                budget -= 1
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        following.append(Path(entry.path))
+                    elif entry.is_file(follow_symlinks=False):
+                        total += entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    continue
+        pending = following
+    return total
+
+
+def space_facts(space: dict, index: int) -> dict:
+    slug = str(space["slug"])
+    return {
+        "id": slug,
+        "slug": slug,
+        "name": str(space.get("name") or slug),
+        "email": str(space.get("email") or ""),
+        "role": space.get("role") if space.get("role") in SPACE_ROLES else "Member",
+        "path": f"/{USERS_DIR_NAME}/{slug}",
+        "usedBytes": folder_bytes(users_root() / slug),
+        "createdAt": str(space.get("createdAt") or ""),
+        "color": str(space.get("color") or SPACE_PALETTE[index % len(SPACE_PALETTE)]),
+    }
+
+
+def spaces_facts() -> list[dict]:
+    """Registered spaces whose folder still exists; a folder deleted in Files drops out."""
+    spaces = load_spaces()
+    present = [space for space in spaces if (users_root() / str(space["slug"])).is_dir()]
+    if len(present) != len(spaces):
+        try:
+            save_spaces(present)
+        except OSError:
+            pass
+    return [space_facts(space, index) for index, space in enumerate(present)]
+
+
+def create_space(payload: dict) -> dict:
+    name = str(payload.get("name", "")).strip()
+    email = str(payload.get("email", "")).strip().lower()
+    role = str(payload.get("role", "Member"))
+    if len(name) < 2:
+        raise ValueError("give the person a name")
+    if len(name) > 80:
+        raise ValueError("keep names under 80 characters")
+    if role not in SPACE_ROLES:
+        raise ValueError("unknown role")
+    if email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise ValueError("that email address does not look right")
+
+    spaces = load_spaces()
+    if email and any(str(space.get("email", "")).lower() == email for space in spaces):
+        raise ValueError("a space with that email already exists")
+
+    root = users_root()
+    root.mkdir(parents=True, exist_ok=True)
+    base = slug_for(name)
+    slug = base
+    counter = 2
+    while any(str(space["slug"]) == slug for space in spaces) or (root / slug).exists():
+        slug = f"{base}-{counter}"
+        counter += 1
+    (root / slug).mkdir()
+
+    space = {
+        "slug": slug,
+        "name": name,
+        "email": email,
+        "role": role,
+        "color": SPACE_PALETTE[len(spaces) % len(SPACE_PALETTE)],
+        "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    save_spaces([*spaces, space])
+    return space_facts(space, len(spaces))
+
+
+def delete_space(slug: str) -> dict:
+    slug = str(slug or "").strip()
+    if not slug or "/" in slug or slug in (".", ".."):
+        raise ValueError("unknown space")
+    spaces = load_spaces()
+    space = next((item for item in spaces if str(item["slug"]) == slug), None)
+    if space is None:
+        raise LookupError("that person has no space on this host")
+
+    target = users_root() / slug
+    if target.is_dir():
+        # Same rule as the Files app: deleting moves to Trash, never unlinks.
+        TRASH.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(target), str(unique_child(TRASH, slug)))
+    save_spaces([item for item in spaces if str(item["slug"]) != slug])
+    return space_facts(space, 0)
+
+
 def services_facts() -> list[dict]:
     try:
         completed = subprocess.run(
@@ -779,6 +933,7 @@ class Handler(BaseHTTPRequestHandler):
                         "files": nodes,
                         "storage": storage,
                         "users": users_facts(self.identity()),
+                        "spaces": spaces_facts(),
                         "services": services,
                         "notifications": notifications_facts(storage, services),
                         "roots": [
@@ -899,11 +1054,33 @@ class Handler(BaseHTTPRequestHandler):
             if route == "/api/files/content":
                 self.upload()
                 return
+            if route == "/api/users":
+                space = create_space(self.body())
+                self.json({"ok": True, "space": space}, HTTPStatus.CREATED)
+                return
             self.fail("not found", HTTPStatus.NOT_FOUND)
+        except LookupError as error:
+            self.fail(str(error), HTTPStatus.NOT_FOUND)
         except ValueError as error:
             self.fail(str(error))
         except FileExistsError:
             self.fail("that item already exists", HTTPStatus.CONFLICT)
+        except OSError as error:
+            self.fail(f"{error.strerror or error}", HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def do_DELETE(self) -> None:
+        route = urllib.parse.urlsplit(self.path).path.rstrip("/") or "/"
+        try:
+            if route.startswith("/api/users/"):
+                slug = urllib.parse.unquote(route[len("/api/users/") :])
+                space = delete_space(slug)
+                self.json({"ok": True, "slug": space["slug"], "name": space["name"]})
+                return
+            self.fail("not found", HTTPStatus.NOT_FOUND)
+        except LookupError as error:
+            self.fail(str(error), HTTPStatus.NOT_FOUND)
+        except ValueError as error:
+            self.fail(str(error))
         except OSError as error:
             self.fail(f"{error.strerror or error}", HTTPStatus.INTERNAL_SERVER_ERROR)
 

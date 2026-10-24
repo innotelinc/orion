@@ -15,13 +15,16 @@ DevTools Protocol at `127.0.0.1:9222`; the data is this machine's.
 - **Files** — deep-linkable folders (`#/files?path=/files`), upload, new folder,
   rename, star, download, image preview and trash. Every action is a real
   filesystem call on `/srv/storage`.
+- **Spaces** — every person gets a folder under `/srv/storage/Users`, created or
+  removed in Settings → Users and browsable like any other folder. A space is a
+  folder, not a session: there is no sign-in or logout attached to it.
 - **Services** — the container's systemd units with live state. Start, stop and
   restart call `systemctl`; nothing here pretends to install anything.
 - **Storage** — mounted filesystems with `statvfs` capacity and the block devices
   visible in `/sys/block`, labelled as host devices rather than pool members.
-- **Settings** — host facts, network facts, Unix accounts, the forwarded SSO
-  identity, and the build. Theme/accent/wallpaper/density are the only settings
-  that persist, and they persist in this browser.
+- **Settings** — host facts, network facts, user spaces, Unix accounts, the
+  forwarded SSO identity, and the build. Theme/accent/wallpaper/density are the
+  only settings that persist, and they persist in this browser.
 - **Command palette** (`⌘K` / `Ctrl+K`) — jump to a view, a file or an action.
 
 ## Run it
@@ -43,11 +46,19 @@ The dev server proxies `/api` to `http://127.0.0.1:8099` by default; set
 | --- | --- |
 | `GET /api/system` | hostname, kernel, runtime, CPU, memory, network, version, SSO identity |
 | `GET /api/metrics` | latest sample plus 60 points of CPU/RAM/interface history |
-| `GET /api/state` | file tree, volumes, devices, accounts, units, notices |
+| `GET /api/state` | file tree, volumes, devices, accounts, spaces, units, notices |
 | `POST /api/files/{mkdir,rename,delete,star}` | filesystem mutations; deletes move to `.orion/trash` |
 | `POST /api/files/content?path=&name=` | upload, streamed to disk |
 | `GET /api/files/content?path=` | download, or `&inline=1` for previews |
 | `POST /api/services` | start/stop/restart a unit |
+| `POST /api/users` | create a person's folder and record it in `.orion/spaces.json` |
+| `DELETE /api/users/{slug}` | move that folder to `.orion/trash` and forget it |
+
+A space is a directory: `/srv/storage/Users/<slug>`, named from the person with a
+numeric suffix when two people share a name. Removing one goes through Trash like
+any other delete, so a mistaken removal is recoverable. Deleting the folder in
+Files instead leaves the registry entry behind, and the API drops the stale entry
+the next time it builds `/api/state`.
 
 It runs as `orion-api.service` and is only reachable through nginx.
 
@@ -141,6 +152,10 @@ directory, and those are deliberately two different lists:
 - **No machine with admin rights.** Every account that can administer the directory is
   a normal Authentik login (`type: internal`); outpost and client credentials hold no
   admin groups.
+
+Every signed-in visitor sees the same desktop and every space in it. A space groups
+one person's files; it does not hide them from the others. Removing a space from
+Settings does not end anyone's session either — sign out at the edge does that.
 
 Two things watch that. `deploy/sso/authentik-audit.py` is the read-only human audit: who
 is privileged, who is dormant, which group is the widest, and whether any non-human

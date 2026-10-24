@@ -45,16 +45,35 @@ export interface FileNode {
   tone: FileTone
 }
 
+export type UserRole = 'Owner' | 'Admin' | 'Member' | 'Guest'
+
 export interface UserAccount {
   id: string
   name: string
   email: string
-  role: 'Owner' | 'Admin' | 'Member' | 'Guest'
+  role: UserRole
   lastActive: string
   color: string
   isCurrent?: boolean
   account?: string
   home?: string
+}
+
+/**
+ * A person's own folder on the storage volume. There is no session attached:
+ * adding one creates the directory, removing one moves it to Trash.
+ */
+export interface Space {
+  id: string
+  slug: string
+  name: string
+  email: string
+  role: UserRole
+  /** Desktop path of the folder, e.g. `/Users/ada`. */
+  path: string
+  usedBytes: number
+  createdAt: string
+  color: string
 }
 
 export interface Disk {

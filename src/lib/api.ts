@@ -3,16 +3,19 @@ import type {
   Metrics,
   NotificationItem,
   RootEntry,
+  Space,
   StorageState,
   SystemInfo,
   SystemService,
   UserAccount,
+  UserRole,
 } from '../types'
 
 export interface StatePayload {
   files: FileNode[]
   storage: StorageState
   users: UserAccount[]
+  spaces: Space[]
   services: SystemService[]
   notifications: NotificationItem[]
   roots: RootEntry[]
@@ -60,7 +63,12 @@ function post<T>(path: string, body: unknown): Promise<T> {
 export const api = {
   system: () => request<SystemInfo>('/api/system'),
   metrics: () => request<Metrics>('/api/metrics'),
-  state: () => request<StatePayload>('/api/state'),
+  // A bundle can outlive the API it was deployed with; an older one has no
+  // `spaces`, and the Users tab must not crash on that.
+  state: async (): Promise<StatePayload> => {
+    const payload = await request<StatePayload>('/api/state')
+    return { ...payload, spaces: payload.spaces ?? [] }
+  },
 
   mkdir: (parent: string, name: string) =>
     post<{ ok: true; path: string }>('/api/files/mkdir', { parent, name }),
@@ -94,6 +102,13 @@ export const api = {
 
   service: (unit: string, action: 'start' | 'stop' | 'restart') =>
     post<{ ok: true; unit: string; action: string }>('/api/services', { unit, action }),
+
+  createSpace: (input: { name: string; email: string; role: UserRole }) =>
+    post<{ ok: true; space: Space }>('/api/users', input),
+  deleteSpace: (id: string) =>
+    request<{ ok: true; slug: string; name: string }>(`/api/users/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
 }
 
 export function downloadUrl(path: string, inline = false) {

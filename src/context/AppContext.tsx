@@ -19,12 +19,14 @@ import type {
   RootEntry,
   ServiceAction,
   Settings,
+  Space,
   StorageState,
   SystemInfo,
   SystemService,
   Toast,
   ToastTone,
   UserAccount,
+  UserRole,
 } from '../types'
 
 const SETTINGS_KEY = 'orion.preferences.v2'
@@ -63,6 +65,7 @@ interface AppContextValue {
   roots: RootEntry[]
   storage: StorageState
   users: UserAccount[]
+  spaces: Space[]
   services: SystemService[]
   notifications: NotificationItem[]
   loading: boolean
@@ -74,6 +77,8 @@ interface AppContextValue {
   deleteFiles: (ids: string[]) => Promise<number>
   toggleStar: (id: string) => Promise<void>
   serviceAction: (unit: string, action: ServiceAction) => Promise<ActionResult>
+  addSpace: (input: { name: string; email: string; role: UserRole }) => Promise<ActionResult>
+  removeSpace: (id: string) => Promise<ActionResult>
   dismissNotification: (id: string) => void
   markAllRead: () => void
   markRead: (id: string) => void
@@ -116,6 +121,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     files: [],
     storage: EMPTY_STORAGE,
     users: [],
+    spaces: [],
     services: [],
     notifications: [],
     roots: [],
@@ -364,6 +370,48 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [loadState, pushToast],
   )
 
+  const addSpace = useCallback(
+    async (input: { name: string; email: string; role: UserRole }): Promise<ActionResult> => {
+      try {
+        const { space } = await api.createSpace(input)
+        await loadState()
+        pushToast({
+          title: `${space.name} has a space`,
+          description: `${space.path} is ready for their files.`,
+          tone: 'success',
+        })
+        return { ok: true }
+      } catch (failure) {
+        return {
+          ok: false,
+          error: failure instanceof Error ? failure.message : 'The host refused to create it.',
+        }
+      }
+    },
+    [loadState, pushToast],
+  )
+
+  const removeSpace = useCallback(
+    async (id: string): Promise<ActionResult> => {
+      try {
+        const result = await api.deleteSpace(id)
+        await loadState()
+        pushToast({
+          title: `${result.name} removed`,
+          description: 'Their folder moved to Trash; nothing was unlinked.',
+          tone: 'info',
+        })
+        return { ok: true }
+      } catch (failure) {
+        return {
+          ok: false,
+          error: failure instanceof Error ? failure.message : 'The host refused to delete it.',
+        }
+      }
+    },
+    [loadState, pushToast],
+  )
+
   const dismissNotification = useCallback((id: string) => {
     setDismissed((previous) => new Set(previous).add(id))
   }, [])
@@ -403,6 +451,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       roots: state.roots,
       storage: state.storage,
       users: state.users,
+      spaces: state.spaces,
       services: state.services,
       notifications,
       loading,
@@ -414,6 +463,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       deleteFiles,
       toggleStar,
       serviceAction,
+      addSpace,
+      removeSpace,
       dismissNotification,
       markAllRead,
       markRead,
@@ -438,6 +489,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       deleteFiles,
       toggleStar,
       serviceAction,
+      addSpace,
+      removeSpace,
       dismissNotification,
       markAllRead,
       markRead,
