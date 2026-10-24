@@ -420,6 +420,7 @@ npm run typecheck
 npm run build
 python3 -m unittest discover -s server/tests -v   # the role rules, on a temp data root
 node scripts/smoke-dom.mjs   # renders the bundle in jsdom against the live API
+ORION_SMOKE_FIXTURES=dir node scripts/smoke-dom.mjs   # same, from saved system/state/metrics JSON
 ```
 
 The smoke script reads `/api/system|state|metrics` from the container and checks
