@@ -1116,7 +1116,9 @@ class AppCatalogueTestCase(unittest.TestCase):
         self.assertEqual(ran, [])
 
     def test_the_host_remedy_is_on_the_card(self):
-        self.assertEqual(self._nfs()["hint"], "host: apt install nfs-kernel-server")
+        self.assertEqual(
+            self._nfs()["hint"], "host export: /etc/exports.d/orion.exports"
+        )
 
     def test_smb_is_still_installable(self):
         entry = next(app for app in self.api.apps_facts() if app["id"] == "smb")

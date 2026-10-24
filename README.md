@@ -148,9 +148,16 @@ findmnt -t zfs | grep nas-data
 that directory, so the host's own `/etc/exports` is left alone):
 
 ```
-/var/lib/incus/storage-pools/incus/custom/default_nas-data/Users/household  192.168.1.0/24(rw,sync,no_subtree_check,all_squash,anonuid=1001001,anongid=1001001)
-/var/lib/incus/storage-pools/incus/custom/default_nas-data/media             192.168.1.0/24(ro,sync,no_subtree_check,all_squash,anonuid=1000000,anongid=1000000)
+/var/lib/incus/storage-pools/incus/custom/default_nas-data/Users/household  192.168.1.52(rw,sync,no_subtree_check,all_squash,anonuid=1001001,anongid=1001001)
+/var/lib/incus/storage-pools/incus/custom/default_nas-data/media             192.168.1.52(ro,sync,no_subtree_check,all_squash,anonuid=1000000,anongid=1000000)
 ```
+
+**Name the clients, never the subnet.** `sec=sys` has no password, so an export
+to `192.168.1.0/24` is readable by every device on the LAN — a phone, a printer,
+an untrusted laptop. Each line names one client; add a line per machine that
+genuinely mounts the share and nothing else. Confirm the restriction with a
+mount attempt from an unlisted address, which the server answers with
+`access denied by server`.
 
 `exportfs -ra`, then `exportfs -v` to confirm. Two things about those ids:
 
@@ -176,9 +183,11 @@ it logs `orion: the NAS dataset was not mounted; nfs-server started without it`
 — the export path only exists inside the dataset, so nothing is ever published
 for an empty mountpoint.
 
-NFSv4 with `sys` security has no password of its own: anyone on the LAN who can
-reach 2049 is the household account, so do not put private material in the
-household share, and keep 2049 off the internet.
+NFSv4 with `sys` security has no password of its own: every named client is the
+household account, so nothing private belongs in the household share — the share
+is also the one SMB gives to every space. Credentials go in a personal space,
+which NFS does not export at all; `Users/<slug>` folders are reachable only over
+SMB with that person's credential. Keep 2049 off the internet as well.
 
 The service is `ProtectSystem=strict`, which is what keeps a bug here out of
 `/etc`. apt, `useradd` and `smbpasswd` genuinely need that access, so each change

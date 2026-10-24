@@ -126,7 +126,7 @@ APP_CATALOGUE: list[dict] = [
             "No NFS server can run inside this container. Mount the SMB shares instead, or "
             "export the storage from the incus host — README, NFS."
         ),
-        "hint": "host: apt install nfs-kernel-server",
+        "hint": "host export: /etc/exports.d/orion.exports",
     },
     {
         "id": "discovery",

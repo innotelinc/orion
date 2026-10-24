@@ -175,7 +175,7 @@ const appsCatalogue = {
         (button) => button.textContent.trim() === 'Install',
       )
     : false,
-  namesTheHost: Boolean(nfsCard) && nfsCard.textContent.includes('nfs-kernel-server'),
+  namesTheHost: Boolean(nfsCard) && nfsCard.textContent.includes('orion.exports'),
 }
 const storageText = await at('#/storage')
 const poolCards = window.document.querySelectorAll('.pool-card').length
