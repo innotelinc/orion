@@ -660,6 +660,21 @@ class MachineNameTestCase(unittest.TestCase):
         )
         self.assertEqual(self.api.netbios_name("192.168.1.20"), "")
 
+    def test_this_server_never_names_a_client(self):
+        # Loopback and the box's own address answer with its own aliases.
+        self.api.run_root = lambda *args, **kwargs: (
+            "Looking up status of 127.0.0.1\n"
+            "\tORION-NAS       <00> -         B <ACTIVE>\n"
+            "\tNAS             <00> -         B <ACTIVE>\n"
+        )
+        self.assertEqual(self.api.netbios_name("127.0.0.1"), "")
+
+    def test_a_lookup_cannot_wait_ten_seconds(self):
+        commands = []
+        self.api.run_root = lambda script, **kwargs: commands.append(script) or ""
+        self.api.machine_name("192.168.1.71")
+        self.assertTrue(all(call.startswith("timeout 2 ") for call in commands), commands)
+
     def test_ipv6_is_never_asked_of_netbios(self):
         asked = []
         self.api.run_root = lambda script, **kwargs: asked.append(script) or ""

@@ -1770,12 +1770,21 @@ MACHINE_NAMES: dict[str, tuple[float, str]] = {}
 MACHINE_NAME_TTL = 3600.0
 # A name that did not answer once is asked again later, but not on every poll.
 MACHINE_NAME_MISS_TTL = 600.0
+# Names that are this server talking about itself. `nmblookup -A` answers for
+# 0.0.0.0, for loopback and for the box's own address with its own aliases, and
+# a share called "NAS" would be a confusing thing to call somebody's laptop.
+OWN_NAMES = {NETBIOS_NAME.upper(), DISCOVERY_NAME.upper(), DISCOVERY_NAME.replace("-", "").upper(), "NAS", WORKGROUP.upper()}
+# nmblookup waits ten seconds for a machine that does not answer, which is far
+# too long for a request; two is enough on a LAN and the miss is cached anyway.
+LOOKUP_TIMEOUT = 2
 
 
 def netbios_name(address: str) -> str:
     """The Windows name a client answers to on its own link, or ''."""
     try:
-        output = run_root(f"nmblookup -A {shlex.quote(address)}", timeout=8)
+        output = run_root(
+            f"timeout {LOOKUP_TIMEOUT} nmblookup -A {shlex.quote(address)}", timeout=6
+        )
     except (OSError, RuntimeError, subprocess.SubprocessError):
         return ""
     # nmblookup falls back to 0.0.0.0 for an address it cannot parse — including
@@ -1788,7 +1797,7 @@ def netbios_name(address: str) -> str:
         if len(fields) < 2 or fields[1] != "<00>" or "<GROUP>" in fields:
             continue
         name = fields[0].strip().rstrip("$")
-        if not name or name.upper() in (NETBIOS_NAME.upper(), WORKGROUP.upper(), "__MSBROWSE__"):
+        if not name or name.upper() in OWN_NAMES or name.upper() == "__MSBROWSE__":
             continue
         return name
     return ""
@@ -1801,7 +1810,9 @@ def resolver_name(address: str) -> str:
     avahi's NSS module is installed — the paths a NetBIOS lookup cannot reach.
     """
     try:
-        output = run_root(f"getent hosts {shlex.quote(address)}", timeout=8)
+        output = run_root(
+            f"timeout {LOOKUP_TIMEOUT} getent hosts {shlex.quote(address)}", timeout=6
+        )
     except (OSError, RuntimeError, subprocess.SubprocessError):
         return ""
     for line in output.splitlines():
@@ -1810,6 +1821,8 @@ def resolver_name(address: str) -> str:
             continue
         name = fields[1].rstrip(".")
         if not name or name == address or name.split(".")[0] == "localhost":
+            continue
+        if name.split(".")[0].upper() in OWN_NAMES:
             continue
         return name
     return ""
