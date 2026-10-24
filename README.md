@@ -95,10 +95,11 @@ deploy; Settings → About reads it.
   certificate.
 
 The proxy forwards the signed-in address as `X-Auth-Request-Email`, which the API
-shows as the current session. Settings → Users offers **Sign out**, which goes to
-`/oauth2/sign_out` with Authentik's `end-session` flow as the redirect: clearing
-only the proxy cookie signs the browser straight back in, because the provider
-still remembers it.
+shows as the current session. Settings → Users offers **Sign out**, and the landing
+page's title bar carries the same link, so signing out never requires opening the
+desktop. Both go to `/oauth2/sign_out` with Authentik's `end-session` flow as the
+redirect: clearing only the proxy cookie signs the browser straight back in,
+because the provider still remembers it.
 
 Three things about that chain fail quietly, so they are part of the deploy rather
 than something to rediscover:

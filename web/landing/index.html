@@ -90,6 +90,18 @@
       white-space: nowrap;
     }
 
+    /* The bar's status pill doubles as the way out of the session, so signing
+       out does not require opening the desktop first. */
+    a.pill {
+      text-decoration: none;
+      transition: color .15s ease, border-color .15s ease;
+    }
+
+    a.pill:hover, a.pill:focus-visible {
+      color: var(--ink);
+      border-color: var(--ink-faint);
+    }
+
     .hero {
       display: grid;
       grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr);
@@ -275,6 +287,11 @@
       </div>
       <span class="bar__spacer"></span>
       <span class="pill">Sign-in required</span>
+      <a
+        class="pill"
+        href="/oauth2/sign_out?rd=https%3A%2F%2Fauth.cerulean.innotel.us%2Fapplication%2Fo%2Forion%2Fend-session%2F"
+        title="Ends the edge proxy's cookie and your Authentik session"
+      >Sign out</a>
     </header>
 
     <div class="hero">
