@@ -133,6 +133,7 @@ export function Files({ navigate, initialPath, initialTrash, highlightId }: File
   // The path is a real address bar: one click puts the whole path in an input,
   // selected, so it can be typed over instead of double-clicked word by word.
   const [addressDraft, setAddressDraft] = useState<string | null>(null)
+  const [addressActive, setAddressActive] = useState(-1)
   const uploadRef = useRef<HTMLInputElement>(null)
   const addressRef = useRef<HTMLInputElement>(null)
 
@@ -185,12 +186,17 @@ export function Files({ navigate, initialPath, initialTrash, highlightId }: File
     return () => window.clearTimeout(timer)
   }, [files, highlightId])
 
+  const addressOpen = addressDraft !== null
+
+  // Selecting the path belongs to opening the bar, not to every change of it:
+  // re-selecting on each keystroke would swallow every letter after the first.
   useEffect(() => {
+    if (!addressOpen) return
     const input = addressRef.current
     if (!input) return
     input.focus()
     input.select()
-  }, [addressDraft])
+  }, [addressOpen])
 
   const startAddressEdit = () => {
     if (trashOpen) return
@@ -220,7 +226,10 @@ export function Files({ navigate, initialPath, initialTrash, highlightId }: File
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [addressDraft, currentPath, trashOpen])
 
-  const cancelAddressEdit = () => setAddressDraft(null)
+  const cancelAddressEdit = () => {
+    setAddressDraft(null)
+    setAddressActive(-1)
+  }
 
   const submitAddress = () => {
     if (addressDraft === null) return
@@ -236,9 +245,56 @@ export function Files({ navigate, initialPath, initialTrash, highlightId }: File
       return
     }
     setAddressDraft(null)
+    setAddressActive(-1)
     setQuery('')
     setSelectedIds(new Set())
     navigate('files', { path })
+  }
+
+  // Shell-style completion: the segment being typed is completed from the
+  // folders that actually exist in the folder before it, so a path can be
+  // walked a level at a time instead of being remembered and typed in full.
+  const addressParts = useMemo(() => {
+    const text = addressDraft ?? ''
+    const slash = text.lastIndexOf('/')
+    const prefix = slash === -1 ? '' : text.slice(0, slash + 1)
+    const segment = text.slice(slash + 1)
+    const trimmed = prefix.replace(/^\/+|\/+$/g, '')
+    return { prefix, segment, base: trimmed ? `/${trimmed}` : '/' }
+  }, [addressDraft])
+
+  const addressSuggestions = useMemo(() => {
+    if (addressDraft === null) return []
+    const needle = addressParts.segment.toLowerCase()
+    return files
+      .filter(
+        (node) =>
+          node.type === 'folder' &&
+          node.parent === addressParts.base &&
+          node.name.toLowerCase().startsWith(needle) &&
+          // A segment that is already spelled out completely in full has
+          // nothing left to complete.
+          node.name.toLowerCase() !== needle,
+      )
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, 6)
+  }, [addressDraft, addressParts, files])
+
+  useEffect(() => {
+    setAddressActive(addressSuggestions.length > 0 ? 0 : -1)
+  }, [addressDraft, addressSuggestions.length])
+
+  const completeAddress = (name: string) => {
+    const next = `${addressParts.prefix}${name}/`
+    setAddressDraft(next)
+    // The caret belongs at the end of what was completed, not over the whole
+    // path, so the next level can be typed straight away.
+    window.requestAnimationFrame(() => {
+      const input = addressRef.current
+      if (!input) return
+      input.focus()
+      input.setSelectionRange(next.length, next.length)
+    })
   }
 
   const breadcrumbs = useMemo(() => {
@@ -522,7 +578,31 @@ export function Files({ navigate, initialPath, initialTrash, highlightId }: File
                   // One click selects the whole path, so the next keystroke
                   // replaces it: no second click or drag to clear it first.
                   onFocus={(event) => event.currentTarget.select()}
+                  aria-autocomplete="list"
+                  aria-expanded={addressSuggestions.length > 0}
+                  aria-controls="files-address-menu"
                   onKeyDown={(event) => {
+                    if (event.key === 'Tab' && addressSuggestions.length > 0) {
+                      const choice =
+                        addressSuggestions[addressActive >= 0 ? addressActive : 0]
+                      if (choice) {
+                        event.preventDefault()
+                        completeAddress(choice.name)
+                      }
+                      return
+                    }
+                    if (event.key === 'ArrowDown' && addressSuggestions.length > 0) {
+                      event.preventDefault()
+                      setAddressActive((index) => (index + 1) % addressSuggestions.length)
+                      return
+                    }
+                    if (event.key === 'ArrowUp' && addressSuggestions.length > 0) {
+                      event.preventDefault()
+                      setAddressActive((index) =>
+                        index <= 0 ? addressSuggestions.length - 1 : index - 1,
+                      )
+                      return
+                    }
                     if (event.key === 'Enter') {
                       event.preventDefault()
                       submitAddress()
@@ -534,6 +614,36 @@ export function Files({ navigate, initialPath, initialTrash, highlightId }: File
                   }}
                   onBlur={cancelAddressEdit}
                 />
+                {addressSuggestions.length > 0 ? (
+                  <ul
+                    className="files-address__menu"
+                    id="files-address-menu"
+                    role="listbox"
+                    aria-label="Folders"
+                  >
+                    {addressSuggestions.map((node, index) => (
+                      <li key={node.id} role="presentation">
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected={index === addressActive}
+                          className={classNames(
+                            'files-address__option',
+                            index === addressActive && 'is-active',
+                          )}
+                          // Keep the field focused while the pointer is on the
+                          // list, or the blur would close the bar before the
+                          // click lands.
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => completeAddress(node.name)}
+                        >
+                          <Folder size={12} aria-hidden="true" />
+                          <span>{node.name}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </label>
             ) : (
               <nav className="breadcrumbs" aria-label="Breadcrumb">

@@ -199,6 +199,49 @@ const cmdL = await pressKey({ key: 'l', metaKey: true })
 const cmdLCheck = { opens: Boolean(cmdL), path: cmdL?.value ?? null }
 cmdL?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
 await new Promise((resolve) => setTimeout(resolve, 60))
+// Completion is shell-like: a partial folder name plus Tab fills it and leaves a
+// trailing slash, one level at a time. The caret check is the guard against
+// re-selecting the whole path on every keystroke, which would eat the typing.
+const fieldValue = () => window.document.querySelector('.files-address__input')
+const setField = async (value) => {
+  const field = fieldValue()
+  const setValue = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    'value',
+  )?.set
+  setValue?.call(field, value)
+  field.dispatchEvent(new window.Event('input', { bubbles: true }))
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  return fieldValue()
+}
+const pressOn = async (node, init) => {
+  node.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, ...init }))
+  await new Promise((resolve) => setTimeout(resolve, 60))
+}
+await pressKey({ key: 'l', ctrlKey: true })
+const typed = await setField('/Us')
+const caretCollapsed =
+  Boolean(typed) && typed.selectionStart === typed.selectionEnd
+typed?.dispatchEvent(
+  new window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+)
+await new Promise((resolve) => setTimeout(resolve, 60))
+const afterFirstTab = fieldValue()?.value ?? null
+const offeredChildren = [...window.document.querySelectorAll('.files-address__option')].map(
+  (node) => node.textContent.trim(),
+)
+await pressOn(fieldValue(), { key: 'Tab' })
+const afterSecondTab = fieldValue()?.value ?? null
+await pressOn(fieldValue(), { key: 'Enter' })
+const completions = {
+  caretCollapsed,
+  afterFirstTab,
+  afterSecondTab,
+  offeredChildren,
+  navigated: [...window.document.querySelectorAll('.breadcrumbs button')].some(
+    (node) => node.textContent.trim() === 'ada',
+  ),
+}
 const addressBar = {
   opens: Boolean(addressInput),
   openedPath,
@@ -208,6 +251,7 @@ const addressBar = {
   ctrlL: ctrlLCheck,
   cmdL: cmdLCheck,
   escapeRestoresCrumbs: Boolean(window.document.querySelector('.breadcrumbs button')),
+  completions,
 }
 // Deletes are recoverable, so the pane that proves it has to open and list what
 // was deleted, with the folder each item came from and a way back.
@@ -386,6 +430,10 @@ const broken =
   !summary.routes.addressBar.cmdL.opens ||
   summary.routes.addressBar.cmdL.path !== '/media' ||
   !summary.routes.addressBar.escapeRestoresCrumbs ||
+  !summary.routes.addressBar.completions.caretCollapsed ||
+  summary.routes.addressBar.completions.afterFirstTab !== '/Users/' ||
+  summary.routes.addressBar.completions.afterSecondTab !== '/Users/ada/' ||
+  !summary.routes.addressBar.completions.navigated ||
   !summary.routes.dashboardShares.card ||
   !summary.routes.dashboardShares.namesTheClient ||
   summary.routes.dashboardShares.live === 0 ||
