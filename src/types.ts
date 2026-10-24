@@ -74,6 +74,22 @@ export interface Space {
   usedBytes: number
   createdAt: string
   color: string
+  /** True when the space also has a Samba account and an exported share. */
+  smb: boolean
+}
+
+/** Something the host can install. `installed` and `state` come from dpkg and systemd. */
+export interface AppEntry {
+  id: string
+  name: string
+  tagline: string
+  description: string
+  category: string
+  packages: string[]
+  unit: string
+  installed: boolean
+  active: boolean
+  state: string
 }
 
 export interface Disk {

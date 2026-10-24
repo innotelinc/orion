@@ -1,5 +1,16 @@
 import { useMemo, useState } from 'react'
-import { ArrowRight, Loader2, Play, RefreshCw, RotateCcw, Search, Square, X } from 'lucide-react'
+import {
+  ArrowRight,
+  Download,
+  Loader2,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Square,
+  Trash2,
+  X,
+} from 'lucide-react'
 import { BUILTIN_APPS } from '../data/apps'
 import { useApp } from '../context/AppContext'
 import { classNames } from '../lib/format'
@@ -8,64 +19,193 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { Modal } from '../components/ui/Modal'
 import { PageHeader } from '../components/ui/PageHeader'
 import { StatusBadge } from '../components/ui/StatusBadge'
-import type { ServiceAction, SystemService } from '../types'
+import type { AppEntry, ServiceAction, SystemService } from '../types'
 import type { NavigateOptions, RouteName } from '../hooks/useRoute'
 
 interface AppStoreProps {
   navigate: (name: RouteName, options?: NavigateOptions) => void
 }
 
+const APP_ICONS: Record<string, string> = {
+  smb: 'Server',
+  nfs: 'HardDrive',
+  discovery: 'Radio',
+}
+
+const CATALOGUE_ACCENT = '#0a63ff'
+
+/** Units that make this box a NAS rather than a web page. */
+const NAS_UNITS = ['nginx', 'orion-api', 'smbd', 'nfs-server']
+
 export function AppStore({ navigate }: AppStoreProps) {
-  const { services, serviceAction, refresh, system, pushToast } = useApp()
+  const {
+    services,
+    serviceAction,
+    apps,
+    installApp,
+    removeApp,
+    refresh,
+    pushToast,
+  } = useApp()
   const [query, setQuery] = useState('')
   const [runningOnly, setRunningOnly] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [confirmStop, setConfirmStop] = useState<SystemService | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState<AppEntry | null>(null)
 
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    return services
-      .filter((service) => (runningOnly ? service.running : true))
-      .filter((service) =>
-        needle
-          ? `${service.name} ${service.description}`.toLowerCase().includes(needle)
-          : true,
-      )
-      .sort((a, b) => {
-        if (a.running !== b.running) return a.running ? -1 : 1
-        return a.name.localeCompare(b.name)
-      })
-  }, [query, runningOnly, services])
+  const needle = query.trim().toLowerCase()
+  const matches = (text: string) => (needle ? text.toLowerCase().includes(needle) : true)
+
+  const installed = useMemo(
+    () => apps.filter((app) => app.installed && matches(`${app.name} ${app.tagline}`)),
+    [apps, needle],
+  )
+  const available = useMemo(
+    () => apps.filter((app) => !app.installed && matches(`${app.name} ${app.tagline}`)),
+    [apps, needle],
+  )
+  const units = useMemo(
+    () =>
+      services
+        .filter((service) => (runningOnly ? service.running : true))
+        .filter((service) => matches(`${service.name} ${service.description}`))
+        .sort((a, b) => {
+          if (a.running !== b.running) return a.running ? -1 : 1
+          return a.name.localeCompare(b.name)
+        }),
+    [services, runningOnly, needle],
+  )
 
   const running = services.filter((service) => service.running).length
+  const stack = services.filter((service) => NAS_UNITS.includes(service.name))
+  const smb = apps.find((app) => app.id === 'smb')
 
   const critical = (service: SystemService) =>
     service.name === 'nginx' || service.name === 'orion-api'
 
-  const act = async (service: SystemService, action: ServiceAction) => {
-    setBusy(service.id)
-    const result = await serviceAction(service.id, action)
+  const act = async (unit: string, action: ServiceAction, label: string) => {
+    setBusy(unit)
+    const result = await serviceAction(unit, action)
     setBusy(null)
     if (!result.ok) {
       pushToast({
-        title: `${action} failed for ${service.name}`,
+        title: `${action} failed for ${label}`,
         description: result.error,
         tone: 'error',
       })
     }
   }
 
+  const install = async (app: AppEntry) => {
+    setBusy(app.id)
+    const result = await installApp(app.id)
+    setBusy(null)
+    if (!result.ok) {
+      pushToast({ title: `Could not install ${app.name}`, description: result.error, tone: 'error' })
+    }
+  }
+
+  const remove = async (app: AppEntry) => {
+    setBusy(app.id)
+    const result = await removeApp(app.id)
+    setBusy(null)
+    setConfirmRemove(null)
+    if (!result.ok) {
+      pushToast({ title: `Could not remove ${app.name}`, description: result.error, tone: 'error' })
+    }
+  }
+
+  const appCard = (app: AppEntry) => (
+    <article key={app.id} className="store-card card">
+      <header className="store-card__head">
+        <AppIcon
+          icon={APP_ICONS[app.id] ?? 'Activity'}
+          accent={app.installed ? CATALOGUE_ACCENT : '#64748b'}
+          size="md"
+        />
+        <div className="store-card__title">
+          <h3>{app.name}</h3>
+          <span>{app.tagline}</span>
+        </div>
+        {app.installed ? (
+          <StatusBadge tone={app.active ? 'success' : 'warning'}>{app.state}</StatusBadge>
+        ) : (
+          <span className="store-category">available</span>
+        )}
+      </header>
+      <p className="store-card__description">{app.description}</p>
+      <div className="store-card__meta">
+        <code>{app.packages.join(' ')}</code> · <code>{app.unit}</code>
+      </div>
+      <footer className="store-card__footer">
+        <span className="store-category">{app.category}</span>
+        <div className="store-card__actions">
+          {app.installed ? (
+            <>
+              {app.id === 'smb' ? (
+                <button
+                  type="button"
+                  className="button button--sm"
+                  onClick={() => navigate('settings', { tab: 'users' })}
+                >
+                  Spaces
+                  <ArrowRight size={13} aria-hidden="true" />
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="button button--sm"
+                disabled={busy !== null}
+                onClick={() => void act(app.unit, 'restart', app.name)}
+              >
+                {busy === app.unit ? (
+                  <Loader2 size={13} className="spin" aria-hidden="true" />
+                ) : (
+                  <RotateCcw size={13} aria-hidden="true" />
+                )}
+                Restart
+              </button>
+              <button
+                type="button"
+                className="button button--sm button--ghost"
+                disabled={busy !== null}
+                onClick={() => setConfirmRemove(app)}
+              >
+                <Trash2 size={13} aria-hidden="true" />
+                Remove
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="button button--sm button--primary"
+              disabled={busy !== null}
+              onClick={() => void install(app)}
+            >
+              {busy === app.id ? (
+                <Loader2 size={13} className="spin" aria-hidden="true" />
+              ) : (
+                <Download size={13} aria-hidden="true" />
+              )}
+              Install
+            </button>
+          )}
+        </div>
+      </footer>
+    </article>
+  )
+
   return (
     <section className="view store-view">
       <PageHeader
-        eyebrow="systemd"
-        title="Services"
-        description="Every unit this container runs, read live. Restarting nginx or the API takes the desktop down for a moment — that is the real behaviour, not a simulation."
+        eyebrow="App Store"
+        title="Apps"
+        description="Each card is something this container really installs: dpkg decides whether it is present and systemd decides whether it answers. The NAS stack at the top is the desktop itself."
         actions={
           <>
             <span className="store-sync">
               <span className="live-dot" aria-hidden="true" />
-              {running} of {services.length} running
+              {running} of {services.length} units running
             </span>
             <button type="button" className="button" onClick={() => void refresh()}>
               <RefreshCw size={14} aria-hidden="true" />
@@ -75,45 +215,136 @@ export function AppStore({ navigate }: AppStoreProps) {
         }
       />
 
+      <section className="store-nas card">
+        <header className="store-card__head">
+          <AppIcon icon="House" accent="var(--accent-strong)" size="md" />
+          <div className="store-card__title">
+            <h3>NAS services</h3>
+            <span>File sharing, the desktop and its API</span>
+          </div>
+          <StatusBadge tone={stack.every((service) => service.running) ? 'success' : 'warning'}>
+            {stack.filter((service) => service.running).length} of {stack.length} up
+          </StatusBadge>
+        </header>
+        <ul className="nas-stack">
+          {stack.map((service) => (
+            <li key={service.id}>
+              <span
+                className={classNames('live-dot', !service.running && 'live-dot--off')}
+                aria-hidden="true"
+              />
+              <strong>{service.name}</strong>
+              <span className="dim">{service.description || service.id}</span>
+              <StatusBadge tone={service.running ? 'success' : 'danger'}>
+                {service.active}
+              </StatusBadge>
+              <div className="store-card__actions">
+                <button
+                  type="button"
+                  className="button button--sm button--ghost"
+                  disabled={busy !== null}
+                  onClick={() => void act(service.id, 'restart', service.name)}
+                >
+                  <RotateCcw size={12} aria-hidden="true" />
+                  Restart
+                </button>
+              </div>
+            </li>
+          ))}
+          {smb && !smb.installed ? (
+            <li>
+              <span className="live-dot live-dot--off" aria-hidden="true" />
+              <strong>SMB</strong>
+              <span className="dim">Not installed — network shares for every space</span>
+              <StatusBadge tone="warning">off</StatusBadge>
+              <div className="store-card__actions">
+                <button
+                  type="button"
+                  className="button button--sm button--primary"
+                  disabled={busy !== null}
+                  onClick={() => void install(smb)}
+                >
+                  {busy === smb.id ? (
+                    <Loader2 size={12} className="spin" aria-hidden="true" />
+                  ) : (
+                    <Download size={12} aria-hidden="true" />
+                  )}
+                  Install
+                </button>
+              </div>
+            </li>
+          ) : null}
+        </ul>
+      </section>
+
       <div className="store-controls">
-        <div className="store-categories" role="group" aria-label="View">
-          <button
-            type="button"
-            className={classNames('store-chip', !runningOnly && 'is-selected')}
-            aria-pressed={!runningOnly}
-            onClick={() => setRunningOnly(false)}
-          >
-            All units
-            <span>{services.length}</span>
-          </button>
-          <button
-            type="button"
-            className={classNames('store-chip', runningOnly && 'is-selected')}
-            aria-pressed={runningOnly}
-            onClick={() => setRunningOnly(true)}
-          >
-            Running
-            <span>{running}</span>
-          </button>
-        </div>
-        <div className="store-controls__right">
-          <label className="store-search">
-            <Search size={14} aria-hidden="true" />
-            <input
-              type="search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search units"
-              aria-label="Search services"
-            />
-            {query ? (
-              <button type="button" aria-label="Clear search" onClick={() => setQuery('')}>
-                <X size={12} aria-hidden="true" />
-              </button>
-            ) : null}
-          </label>
+        <label className="store-search">
+          <Search size={14} aria-hidden="true" />
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search apps and units"
+            aria-label="Search apps and units"
+          />
+          {query ? (
+            <button type="button" aria-label="Clear search" onClick={() => setQuery('')}>
+              <X size={12} aria-hidden="true" />
+            </button>
+          ) : null}
+        </label>
+      </div>
+
+      <div className="store-results-head">
+        <div>
+          <h2>Installed</h2>
+          <span>
+            {installed.length} {installed.length === 1 ? 'app' : 'apps'} on this host
+          </span>
         </div>
       </div>
+
+      {installed.length === 0 ? (
+        <div className="card">
+          <EmptyState
+            icon={Download}
+            title={needle ? 'Nothing installed matches' : 'No apps installed yet'}
+            description={
+              needle
+                ? `No installed app matches “${query}”.`
+                : 'SMB sharing is the one that turns the spaces into network shares.'
+            }
+            action={
+              needle ? (
+                <button type="button" className="button" onClick={() => setQuery('')}>
+                  Clear search
+                </button>
+              ) : undefined
+            }
+          />
+        </div>
+      ) : (
+        <div className="store-grid">{installed.map(appCard)}</div>
+      )}
+
+      <div className="store-results-head">
+        <div>
+          <h2>Available</h2>
+          <span>Packages this container can install with apt</span>
+        </div>
+      </div>
+
+      {available.length === 0 ? (
+        <div className="card">
+          <EmptyState
+            icon={Download}
+            title="Everything is installed"
+            description="The catalogue is fully installed on this host."
+          />
+        </div>
+      ) : (
+        <div className="store-grid">{available.map(appCard)}</div>
+      )}
 
       <div className="store-results-head">
         <div>
@@ -152,18 +383,35 @@ export function AppStore({ navigate }: AppStoreProps) {
 
       <div className="store-results-head">
         <div>
-          <h2>Units</h2>
+          <h2>System units</h2>
           <span>
-            {filtered.length} {filtered.length === 1 ? 'unit' : 'units'}
+            {units.length} {units.length === 1 ? 'unit' : 'units'}
             {query ? ` matching “${query}”` : ''}
           </span>
         </div>
-        <span className="dim store-results-head__hint">
-          systemd on {system?.runtime ?? 'this host'}
-        </span>
+        <div className="store-categories" role="group" aria-label="Filter units">
+          <button
+            type="button"
+            className={classNames('store-chip', !runningOnly && 'is-selected')}
+            aria-pressed={!runningOnly}
+            onClick={() => setRunningOnly(false)}
+          >
+            All
+            <span>{services.length}</span>
+          </button>
+          <button
+            type="button"
+            className={classNames('store-chip', runningOnly && 'is-selected')}
+            aria-pressed={runningOnly}
+            onClick={() => setRunningOnly(true)}
+          >
+            Running
+            <span>{running}</span>
+          </button>
+        </div>
       </div>
 
-      {filtered.length === 0 ? (
+      {units.length === 0 ? (
         <div className="card">
           <EmptyState
             icon={Search}
@@ -178,7 +426,7 @@ export function AppStore({ navigate }: AppStoreProps) {
         </div>
       ) : (
         <div className="store-grid">
-          {filtered.map((service) => (
+          {units.map((service) => (
             <article key={service.id} className="store-card card">
               <header className="store-card__head">
                 <AppIcon
@@ -207,7 +455,7 @@ export function AppStore({ navigate }: AppStoreProps) {
                     type="button"
                     className="button button--sm"
                     disabled={busy !== null}
-                    onClick={() => void act(service, 'restart')}
+                    onClick={() => void act(service.id, 'restart', service.name)}
                   >
                     {busy === service.id ? (
                       <Loader2 size={13} className="spin" aria-hidden="true" />
@@ -236,7 +484,7 @@ export function AppStore({ navigate }: AppStoreProps) {
                       type="button"
                       className="button button--sm button--primary"
                       disabled={busy !== null}
-                      onClick={() => void act(service, 'start')}
+                      onClick={() => void act(service.id, 'start', service.name)}
                     >
                       <Play size={12} aria-hidden="true" />
                       Start
@@ -252,10 +500,46 @@ export function AppStore({ navigate }: AppStoreProps) {
       <div className="store-footnote">
         <AppIcon icon="Activity" accent="var(--accent-strong)" size="sm" />
         <span>
-          Units are container-local. The edge proxy and TLS live on the host and are not visible
-          from here.
+          Installs run apt inside this container only. The edge proxy, TLS and sign-in live on the
+          host and are not visible from here.
         </span>
       </div>
+
+      <Modal
+        open={Boolean(confirmRemove)}
+        onClose={() => setConfirmRemove(null)}
+        title={`Remove ${confirmRemove?.name ?? 'app'}?`}
+        description="The package is purged. Data on the storage volume is left alone."
+        size="sm"
+        footer={
+          <>
+            <button type="button" className="button" onClick={() => setConfirmRemove(null)}>
+              Keep it
+            </button>
+            <button
+              type="button"
+              className="button button--danger"
+              disabled={busy !== null}
+              onClick={() => {
+                if (confirmRemove) void remove(confirmRemove)
+              }}
+            >
+              <Trash2 size={13} aria-hidden="true" />
+              Remove app
+            </button>
+          </>
+        }
+      >
+        <div className="danger-note">
+          <Trash2 size={16} aria-hidden="true" />
+          <span>
+            {confirmRemove?.packages.join(' ')} will be purged
+            {confirmRemove?.id === 'smb'
+              ? ', and the Samba accounts created for spaces go with it. Folders and files stay.'
+              : '.'}
+          </span>
+        </div>
+      </Modal>
 
       <Modal
         open={Boolean(confirmStop)}
@@ -273,7 +557,7 @@ export function AppStore({ navigate }: AppStoreProps) {
               className="button button--danger"
               onClick={() => {
                 if (!confirmStop) return
-                void act(confirmStop, 'stop')
+                void act(confirmStop.id, 'stop', confirmStop.name)
                 setConfirmStop(null)
               }}
             >

@@ -1,4 +1,5 @@
 import type {
+  AppEntry,
   FileNode,
   Metrics,
   NotificationItem,
@@ -16,6 +17,7 @@ export interface StatePayload {
   storage: StorageState
   users: UserAccount[]
   spaces: Space[]
+  apps: AppEntry[]
   services: SystemService[]
   notifications: NotificationItem[]
   roots: RootEntry[]
@@ -64,10 +66,10 @@ export const api = {
   system: () => request<SystemInfo>('/api/system'),
   metrics: () => request<Metrics>('/api/metrics'),
   // A bundle can outlive the API it was deployed with; an older one has no
-  // `spaces`, and the Users tab must not crash on that.
+  // `spaces` or `apps`, and the UI must not crash on that.
   state: async (): Promise<StatePayload> => {
     const payload = await request<StatePayload>('/api/state')
-    return { ...payload, spaces: payload.spaces ?? [] }
+    return { ...payload, spaces: payload.spaces ?? [], apps: payload.apps ?? [] }
   },
 
   mkdir: (parent: string, name: string) =>
@@ -103,12 +105,22 @@ export const api = {
   service: (unit: string, action: 'start' | 'stop' | 'restart') =>
     post<{ ok: true; unit: string; action: string }>('/api/services', { unit, action }),
 
-  createSpace: (input: { name: string; email: string; role: UserRole }) =>
+  createSpace: (input: { name: string; email: string; role: UserRole; password?: string }) =>
     post<{ ok: true; space: Space }>('/api/users', input),
+  setSpacePassword: (id: string, password: string) =>
+    post<{ ok: true; space: Space }>(
+      `/api/users/${encodeURIComponent(id)}/password`,
+      { password },
+    ),
   deleteSpace: (id: string) =>
     request<{ ok: true; slug: string; name: string }>(`/api/users/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     }),
+
+  installApp: (id: string) =>
+    post<{ ok: true; app: AppEntry }>('/api/apps', { id, action: 'install' }),
+  removeApp: (id: string) =>
+    post<{ ok: true; app: AppEntry }>('/api/apps', { id, action: 'remove' }),
 }
 
 export function downloadUrl(path: string, inline = false) {

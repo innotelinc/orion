@@ -4,6 +4,7 @@ import {
   Globe,
   HardDrive,
   Info,
+  KeyRound,
   LogOut,
   Monitor,
   Moon,
@@ -117,8 +118,10 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
     services,
     users,
     spaces,
+    apps,
     addSpace,
     removeSpace,
+    setSpacePassword,
     pushToast,
     storage,
     refresh,
@@ -126,11 +129,37 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
     loading,
   } = useApp()
   const tab = activeTab
-  const [spaceForm, setSpaceForm] = useState({ name: '', email: '', role: 'Member' as UserRole })
+  const [spaceForm, setSpaceForm] = useState({
+    name: '',
+    email: '',
+    role: 'Member' as UserRole,
+    password: '',
+  })
   const [spaceError, setSpaceError] = useState<string | null>(null)
   const [spaceOpen, setSpaceOpen] = useState(false)
   const [removeSpaceTarget, setRemoveSpaceTarget] = useState<Space | null>(null)
   const [spaceBusy, setSpaceBusy] = useState(false)
+  const [passwordTarget, setPasswordTarget] = useState<Space | null>(null)
+  const [passwordValue, setPasswordValue] = useState('')
+  const [passwordError, setPasswordError] = useState<string | null>(null)
+  const smbApp = apps.find((app) => app.id === 'smb')
+
+  const submitPassword = async () => {
+    if (!passwordTarget) return
+    if (passwordValue.length < 8) {
+      setPasswordError('Use at least 8 characters.')
+      return
+    }
+    setSpaceBusy(true)
+    const result = await setSpacePassword(passwordTarget.id, passwordValue)
+    setSpaceBusy(false)
+    if (!result.ok) {
+      setPasswordError(result.error ?? 'The host refused that password.')
+      return
+    }
+    setPasswordTarget(null)
+    setPasswordValue('')
+  }
 
   const submitSpace = async () => {
     const name = spaceForm.name.trim()
@@ -143,6 +172,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
       name,
       email: spaceForm.email.trim(),
       role: spaceForm.role,
+      password: spaceForm.password || undefined,
     })
     setSpaceBusy(false)
     if (!result.ok) {
@@ -150,7 +180,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
       return
     }
     setSpaceOpen(false)
-    setSpaceForm({ name: '', email: '', role: 'Member' })
+    setSpaceForm({ name: '', email: '', role: 'Member', password: '' })
   }
 
   const confirmRemoveSpace = async () => {
@@ -562,6 +592,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                           <span>{space.email || 'no address recorded'}</span>
                           <span>
                             {space.path} · {formatBytes(space.usedBytes)} stored
+                            {space.smb ? ' · SMB share' : ''}
                           </span>
                         </div>
                         <span className={`role-badge role-badge--${space.role.toLowerCase()}`}>
@@ -570,6 +601,25 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                         <span className="user-row__active">
                           {space.createdAt ? `added ${space.createdAt.slice(0, 10)}` : 'available'}
                         </span>
+                        {smbApp?.installed ? (
+                          <button
+                            type="button"
+                            className="button button--sm button--ghost"
+                            title={
+                              space.smb
+                                ? 'Change the SMB password for this share'
+                                : 'Create the SMB account and share for this space'
+                            }
+                            onClick={() => {
+                              setPasswordTarget(space)
+                              setPasswordValue('')
+                              setPasswordError(null)
+                            }}
+                          >
+                            <KeyRound size={13} aria-hidden="true" />
+                            {space.smb ? 'SMB' : 'Enable SMB'}
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           className="icon-button icon-button--sm user-row__remove"
@@ -872,6 +922,26 @@ systemctl reload nginx`}
           />
         </div>
         <div className="field">
+          <label htmlFor="space-password">SMB password (optional)</label>
+          <input
+            id="space-password"
+            className="input"
+            type="password"
+            autoComplete="new-password"
+            value={spaceForm.password}
+            onChange={(event) => {
+              setSpaceForm((previous) => ({ ...previous, password: event.target.value }))
+              setSpaceError(null)
+            }}
+            placeholder="at least 8 characters"
+          />
+          <span className="field__hint">
+            {smbApp?.installed
+              ? 'Creates their Samba account and share. Leave it empty for a folder only.'
+              : 'Install SMB sharing in the App Store to give spaces network access.'}
+          </span>
+        </div>
+        <div className="field">
           <label htmlFor="space-role">Label</label>
           <select
             id="space-role"
@@ -894,6 +964,62 @@ systemctl reload nginx`}
             {spaceError}
           </span>
         ) : null}
+      </Modal>
+
+      <Modal
+        open={Boolean(passwordTarget)}
+        onClose={() => setPasswordTarget(null)}
+        title={passwordTarget?.smb ? 'Change SMB password' : 'Give this space SMB access'}
+        description={
+          passwordTarget
+            ? `${passwordTarget.name} will sign in to their own share as “${passwordTarget.slug}”.`
+            : undefined
+        }
+        size="sm"
+        footer={
+          <>
+            <button type="button" className="button" onClick={() => setPasswordTarget(null)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={spaceBusy || passwordValue.length < 8}
+              onClick={() => void submitPassword()}
+            >
+              <KeyRound size={14} aria-hidden="true" />
+              Save password
+            </button>
+          </>
+        }
+      >
+        <div className="field">
+          <label htmlFor="space-password-set">Password</label>
+          <input
+            id="space-password-set"
+            className="input"
+            type="password"
+            autoComplete="new-password"
+            data-autofocus
+            value={passwordValue}
+            onChange={(event) => {
+              setPasswordValue(event.target.value)
+              setPasswordError(null)
+            }}
+            placeholder="at least 8 characters"
+            aria-invalid={Boolean(passwordError)}
+          />
+          {passwordError ? (
+            <span className="field__error" role="alert">
+              {passwordError}
+            </span>
+          ) : (
+            <span className="field__hint">
+              Stored by Samba, not by Orion: the API passes it to <code>smbpasswd</code> and keeps
+              no copy.
+            </span>
+          )}
+        </div>
       </Modal>
 
       <Modal

@@ -11,12 +11,15 @@ import {
   FileText,
   FolderOpen,
   Gauge,
+  HardDrive,
   House,
   Images,
   KeyRound,
   Music,
   PlayCircle,
+  Radio,
   RefreshCw,
+  Server,
   Settings,
   Sparkles,
   Store,
@@ -46,6 +49,9 @@ const ICONS: Record<string, LucideIcon> = {
   Music,
   ArrowDownToLine,
   Users,
+  HardDrive,
+  Radio,
+  Server,
 }
 
 export function iconFor(name: string): LucideIcon {

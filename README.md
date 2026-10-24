@@ -18,8 +18,13 @@ DevTools Protocol at `127.0.0.1:9222`; the data is this machine's.
 - **Spaces** — every person gets a folder under `/srv/storage/Users`, created or
   removed in Settings → Users and browsable like any other folder. A space is a
   folder, not a session: there is no sign-in or logout attached to it.
-- **Services** — the container's systemd units with live state. Start, stop and
-  restart call `systemctl`; nothing here pretends to install anything.
+- **App Store** — the NAS stack at the top (nginx, orion-api, smbd), the apps
+  this container can really install with apt, and the systemd units behind them
+  with start, stop and restart. Nothing is simulated: dpkg decides whether an app
+  is present and systemd decides whether it answers.
+- **SMB** — one authenticated Samba share per space plus the media library
+  read-only. Accounts are the spaces; the password lives in Samba, never in
+  Orion.
 - **Storage** — mounted filesystems with `statvfs` capacity and the block devices
   visible in `/sys/block`, labelled as host devices rather than pool members.
 - **Settings** — host facts, network facts, user spaces, Unix accounts, the
@@ -51,6 +56,8 @@ The dev server proxies `/api` to `http://127.0.0.1:8099` by default; set
 | `POST /api/files/content?path=&name=` | upload, streamed to disk |
 | `GET /api/files/content?path=` | download, or `&inline=1` for previews |
 | `POST /api/services` | start/stop/restart a unit |
+| `POST /api/apps` | install or remove a catalogue app with apt |
+| `POST /api/users/{slug}/password` | create or reset that space's Samba account |
 | `POST /api/users` | create a person's folder and record it in `.orion/spaces.json` |
 | `DELETE /api/users/{slug}` | move that folder to `.orion/trash` and forget it |
 
@@ -61,6 +68,27 @@ Files instead leaves the registry entry behind, and the API drops the stale entr
 the next time it builds `/api/state`.
 
 It runs as `orion-api.service` and is only reachable through nginx.
+
+### Apps and SMB
+
+`POST /api/apps` installs one of three catalogue entries with apt: **SMB sharing**
+(`samba`), **NFS server** (`nfs-kernel-server`) and **network discovery**
+(`avahi-daemon`). Only catalogue ids are accepted — the endpoint does not take a
+package name from the browser.
+
+The service is `ProtectSystem=strict`, which is what keeps a bug here out of
+`/etc`. apt, `useradd` and `smbpasswd` genuinely need that access, so each change
+runs in a transient unit via `systemd-run`: the daemon's privileges, none of its
+sandbox, and a unit name (`orion-provision-*`) that shows up in the journal if a
+change is ever reviewed.
+
+SMB shares come from the spaces list, so adding a person with a password creates
+their Unix account (no shell, home set to their folder), adds it to the
+`orion-nas` group, sets the Samba password and rewrites `/etc/samba/smb.conf`
+from the registry. The original file is kept once as
+`/etc/samba/smb.conf.orion-backup`. Each share is fixed to its owner and the media
+library is exported read-only to the group. Removing a space removes its account
+and share; removing the SMB app takes every account with it, and files stay.
 
 ## Deployment
 
@@ -195,7 +223,7 @@ src/
   context/       fetches the API, owns mutations, toasts and notification state
   data/          the four built-in pages, preference defaults, path helpers
   hooks/         hash router, persistence, click-outside
-  views/         Dashboard, Files, AppStore (Services), Storage, Settings
+  views/         Dashboard, Files, AppStore (apps and units), Storage, Settings
 deploy/          systemd unit, vhost, SSO provisioning
 web/landing/     the landing page at /
 ```

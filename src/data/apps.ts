@@ -26,9 +26,9 @@ export const BUILTIN_APPS: AppDefinition[] = [
   },
   {
     id: 'apps',
-    name: 'Services',
-    tagline: 'What this host runs',
-    description: 'systemd units, live state and restarts.',
+    name: 'App Store',
+    tagline: 'Apps and units',
+    description: 'Install services, see what runs, restart units.',
     icon: 'Store',
     accent: '#0a63ff',
     internalRoute: 'apps',

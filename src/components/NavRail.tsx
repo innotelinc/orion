@@ -18,7 +18,7 @@ const NAV_ITEMS: Array<{
 }> = [
   { name: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { name: 'files', label: 'Files', icon: FolderOpen },
-  { name: 'apps', label: 'Services', icon: Store },
+  { name: 'apps', label: 'Apps', icon: Store },
   { name: 'storage', label: 'Storage', icon: HardDrive },
   { name: 'settings', label: 'Settings', icon: Settings },
 ]

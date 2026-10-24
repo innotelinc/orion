@@ -13,6 +13,7 @@ import { joinPath } from '../data/files'
 import { api, type StatePayload } from '../lib/api'
 import { usePersistentState } from '../hooks/usePersistentState'
 import type {
+  AppEntry,
   FileNode,
   Metrics,
   NotificationItem,
@@ -66,6 +67,7 @@ interface AppContextValue {
   storage: StorageState
   users: UserAccount[]
   spaces: Space[]
+  apps: AppEntry[]
   services: SystemService[]
   notifications: NotificationItem[]
   loading: boolean
@@ -77,8 +79,16 @@ interface AppContextValue {
   deleteFiles: (ids: string[]) => Promise<number>
   toggleStar: (id: string) => Promise<void>
   serviceAction: (unit: string, action: ServiceAction) => Promise<ActionResult>
-  addSpace: (input: { name: string; email: string; role: UserRole }) => Promise<ActionResult>
+  addSpace: (input: {
+    name: string
+    email: string
+    role: UserRole
+    password?: string
+  }) => Promise<ActionResult>
   removeSpace: (id: string) => Promise<ActionResult>
+  setSpacePassword: (id: string, password: string) => Promise<ActionResult>
+  installApp: (id: string) => Promise<ActionResult>
+  removeApp: (id: string) => Promise<ActionResult>
   dismissNotification: (id: string) => void
   markAllRead: () => void
   markRead: (id: string) => void
@@ -122,6 +132,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     storage: EMPTY_STORAGE,
     users: [],
     spaces: [],
+    apps: [],
     services: [],
     notifications: [],
     roots: [],
@@ -371,13 +382,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
   )
 
   const addSpace = useCallback(
-    async (input: { name: string; email: string; role: UserRole }): Promise<ActionResult> => {
+    async (input: {
+      name: string
+      email: string
+      role: UserRole
+      password?: string
+    }): Promise<ActionResult> => {
       try {
         const { space } = await api.createSpace(input)
         await loadState()
         pushToast({
           title: `${space.name} has a space`,
-          description: `${space.path} is ready for their files.`,
+          description: space.smb
+            ? `${space.path} is ready, and shared over SMB.`
+            : `${space.path} is ready for their files.`,
           tone: 'success',
         })
         return { ok: true }
@@ -406,6 +424,65 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return {
           ok: false,
           error: failure instanceof Error ? failure.message : 'The host refused to delete it.',
+        }
+      }
+    },
+    [loadState, pushToast],
+  )
+
+  const setSpacePassword = useCallback(
+    async (id: string, password: string): Promise<ActionResult> => {
+      try {
+        await api.setSpacePassword(id, password)
+        await loadState()
+        pushToast({
+          title: 'SMB password set',
+          description: 'The share can be opened with that account now.',
+          tone: 'success',
+        })
+        return { ok: true }
+      } catch (failure) {
+        return {
+          ok: false,
+          error: failure instanceof Error ? failure.message : 'The host refused that password.',
+        }
+      }
+    },
+    [loadState, pushToast],
+  )
+
+  const installApp = useCallback(
+    async (id: string): Promise<ActionResult> => {
+      try {
+        const { app } = await api.installApp(id)
+        await loadState()
+        pushToast({
+          title: `${app.name} installed`,
+          description: `${app.unit} is ${app.state}.`,
+          tone: 'success',
+        })
+        return { ok: true }
+      } catch (failure) {
+        return {
+          ok: false,
+          error: failure instanceof Error ? failure.message : 'apt refused the install.',
+        }
+      }
+    },
+    [loadState, pushToast],
+  )
+
+  const removeApp = useCallback(
+    async (id: string): Promise<ActionResult> => {
+      try {
+        const { app } = await api.removeApp(id)
+        await loadState()
+        pushToast({ title: `${app.name} removed`, tone: 'info' })
+        return { ok: true }
+      } catch (failure) {
+        return {
+          ok: false,
+          error: failure instanceof Error ? failure.message : 'apt refused the removal.',
         }
       }
     },
@@ -452,6 +529,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       storage: state.storage,
       users: state.users,
       spaces: state.spaces,
+      apps: state.apps,
       services: state.services,
       notifications,
       loading,
@@ -465,6 +543,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       serviceAction,
       addSpace,
       removeSpace,
+      setSpacePassword,
+      installApp,
+      removeApp,
       dismissNotification,
       markAllRead,
       markRead,
@@ -491,6 +572,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       serviceAction,
       addSpace,
       removeSpace,
+      setSpacePassword,
+      installApp,
+      removeApp,
       dismissNotification,
       markAllRead,
       markRead,

@@ -43,6 +43,57 @@ SPACES = META / "spaces.json"
 USERS_DIR_NAME = "Users"
 SPACE_ROLES = ("Owner", "Admin", "Member", "Guest")
 SPACE_PALETTE = ["#0a63ff", "#8b5cf6", "#10b981", "#f59e0b", "#f43f5e", "#06b6d4"]
+SMB_CONF = Path("/etc/samba/smb.conf")
+SMB_CONF_BACKUP = Path("/etc/samba/smb.conf.orion-backup")
+SMB_GROUP = "orion-nas"
+APT_TIMEOUT = 900
+
+try:
+    import pwd
+except ImportError:  # Windows has no Unix account database; spaces still work.
+    pwd = None
+
+# Apps this host can actually install. Each entry is a package set and the unit
+# that proves it is running; nothing here is a mock, so an entry that cannot be
+# installed on the container fails with apt's own reason.
+APP_CATALOGUE: list[dict] = [
+    {
+        "id": "smb",
+        "name": "SMB sharing",
+        "tagline": "Samba shares for every space",
+        "description": (
+            "Exports each person's folder as their own authenticated share, plus the media "
+            "library read-only. Accounts are the spaces themselves, managed in Settings."
+        ),
+        "category": "Sharing",
+        "packages": ["samba"],
+        "unit": "smbd.service",
+    },
+    {
+        "id": "nfs",
+        "name": "NFS server",
+        "tagline": "Kernel NFS for Linux and macOS clients",
+        "description": (
+            "Installs the NFS server and starts it. Exports are not written for you: they belong "
+            "to the client's expectations, so they stay a manual /etc/exports edit."
+        ),
+        "category": "Sharing",
+        "packages": ["nfs-kernel-server"],
+        "unit": "nfs-server.service",
+    },
+    {
+        "id": "discovery",
+        "name": "Network discovery",
+        "tagline": "Avahi, so the NAS shows up in Finder",
+        "description": (
+            "Advertises SMB on the LAN over mDNS, so clients find the box without an address "
+            "being typed in."
+        ),
+        "category": "Network",
+        "packages": ["avahi-daemon"],
+        "unit": "avahi-daemon.service",
+    },
+]
 VERSION_FILE = Path(os.environ.get("ORION_VERSION_FILE", "/opt/orion/version.json"))
 BIND = os.environ.get("ORION_BIND", "127.0.0.1")
 PORT = int(os.environ.get("ORION_PORT", "8099"))
@@ -588,6 +639,7 @@ def space_facts(space: dict, index: int) -> dict:
         "usedBytes": folder_bytes(users_root() / slug),
         "createdAt": str(space.get("createdAt") or ""),
         "color": str(space.get("color") or SPACE_PALETTE[index % len(SPACE_PALETTE)]),
+        "smb": bool(space.get("smb")) and samba_installed(),
     }
 
 
@@ -628,7 +680,16 @@ def create_space(payload: dict) -> dict:
     while any(str(space["slug"]) == slug for space in spaces) or (root / slug).exists():
         slug = f"{base}-{counter}"
         counter += 1
+    password = str(payload.get("password") or "")
     (root / slug).mkdir()
+    try:
+        if password:
+            write_smb_password(slug, name, password, adopt=False)
+        smb = bool(password)
+    except (ValueError, RuntimeError):
+        # Nothing half-created: the folder goes back if the account did not.
+        shutil.rmtree(root / slug, ignore_errors=True)
+        raise
 
     space = {
         "slug": slug,
@@ -637,8 +698,11 @@ def create_space(payload: dict) -> dict:
         "role": role,
         "color": SPACE_PALETTE[len(spaces) % len(SPACE_PALETTE)],
         "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "smb": smb,
     }
     save_spaces([*spaces, space])
+    if smb:
+        apply_smb_conf()
     return space_facts(space, len(spaces))
 
 
@@ -651,13 +715,291 @@ def delete_space(slug: str) -> dict:
     if space is None:
         raise LookupError("that person has no space on this host")
 
+    if space.get("smb"):
+        drop_samba_account(slug)
     target = users_root() / slug
     if target.is_dir():
         # Same rule as the Files app: deleting moves to Trash, never unlinks.
         TRASH.mkdir(parents=True, exist_ok=True)
         shutil.move(str(target), str(unique_child(TRASH, slug)))
     save_spaces([item for item in spaces if str(item["slug"]) != slug])
+    if samba_installed():
+        apply_smb_conf()
     return space_facts(space, 0)
+
+
+def set_space_password(slug: str, password: str) -> dict:
+    """Give an existing space an SMB account, or reset the one it has."""
+    spaces = load_spaces()
+    space = next((item for item in spaces if str(item["slug"]) == slug), None)
+    if space is None:
+        raise LookupError("that person has no space on this host")
+    write_smb_password(
+        slug, str(space.get("name") or slug), password, adopt=bool(space.get("smb"))
+    )
+    space["smb"] = True
+    save_spaces(spaces)
+    apply_smb_conf()
+    return space_facts(space, spaces.index(space))
+
+
+# -------------------------------------------------------------- app catalogue
+
+
+def dpkg_installed(package: str) -> bool:
+    try:
+        completed = subprocess.run(
+            ["dpkg-query", "-W", "-f=${Status}", package],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0 and "install ok installed" in completed.stdout
+
+
+def unit_state(unit: str) -> tuple[bool, str]:
+    try:
+        completed = subprocess.run(
+            ["systemctl", "is-active", unit], capture_output=True, text=True, timeout=6
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False, "unknown"
+    state = completed.stdout.strip() or "unknown"
+    return completed.returncode == 0 and state == "active", state
+
+
+def samba_installed() -> bool:
+    return dpkg_installed("samba")
+
+
+def app_by_id(app_id: str) -> dict:
+    for app in APP_CATALOGUE:
+        if app["id"] == app_id:
+            return app
+    raise LookupError("no such app")
+
+
+def app_facts(app: dict) -> dict:
+    installed = all(dpkg_installed(package) for package in app["packages"])
+    active, state = unit_state(app["unit"]) if installed else (False, "not installed")
+    return {
+        "id": app["id"],
+        "name": app["name"],
+        "tagline": app["tagline"],
+        "description": app["description"],
+        "category": app["category"],
+        "packages": list(app["packages"]),
+        "unit": app["unit"],
+        "installed": installed,
+        "active": active,
+        "state": state,
+    }
+
+
+def apps_facts() -> list[dict]:
+    return [app_facts(app) for app in APP_CATALOGUE]
+
+
+def run_root(script: str, stdin_text: str | None = None, timeout: int = APT_TIMEOUT) -> str:
+    """Run a root script outside this service's own filesystem sandbox.
+
+    orion-api.service is ProtectSystem=strict, which is what keeps a bug in this
+    process from editing /etc. apt and samba genuinely need that access, so the
+    work happens in a transient unit: the daemon's privileges, none of its
+    sandbox, and a unit name a human can see in the journal afterwards.
+    """
+    if shutil.which("systemd-run") is None:
+        raise RuntimeError("systemd-run is not installed, so this host cannot make that change")
+    unit = f"orion-provision-{os.getpid()}-{int(time.time() * 1000) % 100_000}"
+    completed = subprocess.run(
+        [
+            "systemd-run",
+            "--quiet",
+            "--collect",
+            "--wait",
+            "--pipe",
+            f"--unit={unit}",
+            "/bin/sh",
+            "-c",
+            script,
+        ],
+        input=stdin_text,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if completed.returncode != 0:
+        lines = [line.strip() for line in (completed.stderr or completed.stdout).splitlines() if line.strip()]
+        raise RuntimeError(lines[-1] if lines else f"the host refused the change ({completed.returncode})")
+    return completed.stdout
+
+
+def install_app(app_id: str) -> dict:
+    app = app_by_id(app_id)
+    packages = " ".join(app["packages"])
+    run_root(
+        "set -e\n"
+        "export DEBIAN_FRONTEND=noninteractive\n"
+        "apt-get update -qq\n"
+        f"apt-get install -y --no-install-recommends {packages}\n"
+        f"systemctl enable --now {app['unit']} >/dev/null 2>&1 || true\n"
+    )
+    if app["id"] == "smb":
+        # The package ships its own smb.conf; replace it with the shares Orion knows.
+        apply_smb_conf()
+    facts = app_facts(app)
+    if not facts["installed"]:
+        raise RuntimeError(f"{app['name']} did not finish installing")
+    return facts
+
+
+def remove_app(app_id: str) -> dict:
+    app = app_by_id(app_id)
+    if app["id"] == "smb":
+        # Accounts exist only for the daemon that owns them, so they go first.
+        for space in load_spaces():
+            if space.get("smb"):
+                drop_samba_account(str(space["slug"]))
+    run_root(
+        "set -e\n"
+        "export DEBIAN_FRONTEND=noninteractive\n"
+        f"systemctl disable --now {app['unit']} >/dev/null 2>&1 || true\n"
+        f"apt-get purge -y {' '.join(app['packages'])}\n"
+    )
+    if app["id"] == "smb":
+        spaces = load_spaces()
+        for space in spaces:
+            space["smb"] = False
+        save_spaces(spaces)
+    return app_facts(app)
+
+
+# ----------------------------------------------------------------------- samba
+
+
+def unix_user_exists(slug: str) -> bool:
+    if pwd is None:
+        return False
+    try:
+        pwd.getpwnam(slug)
+    except KeyError:
+        return False
+    return True
+
+
+def samba_share_label(name: str) -> str:
+    cleaned = re.sub(r"[\[\]\r\n/\\]", "", name).strip()
+    return (cleaned or "Space")[:60]
+
+
+def render_smb_conf(spaces: list[dict]) -> str:
+    lines = [
+        "# Managed by Orion. Rewritten whenever a space is added or removed,",
+        "# so change the shares in Settings rather than editing this file.",
+        "[global]",
+        "   workgroup = WORKGROUP",
+        "   server string = Orion NAS",
+        "   server role = standalone server",
+        "   map to guest = never",
+        "   restrict anonymous = 2",
+        "   usershare allow guests = no",
+        "   server min protocol = SMB2",
+        "   load printers = no",
+        "   printing = bsd",
+        "   printcap name = /dev/null",
+        "   disable spoolss = yes",
+        "   log file = /var/log/samba/log.%m",
+        "   max log size = 1000",
+        "",
+    ]
+    accounts = [str(space["slug"]) for space in spaces if space.get("smb")]
+    media = ROOT / "media"
+    if accounts and media.is_dir():
+        lines += [
+            "[Media]",
+            "   comment = Media library (read only)",
+            f"   path = {media}",
+            "   browseable = yes",
+            "   read only = yes",
+            f"   valid users = @{SMB_GROUP}",
+            f"   force group = {SMB_GROUP}",
+            "",
+        ]
+    used: set[str] = set()
+    for space in spaces:
+        if not space.get("smb"):
+            continue
+        slug = str(space["slug"])
+        label = samba_share_label(str(space.get("name") or slug))
+        if label.lower() in used:
+            label = f"{label} ({slug})"
+        used.add(label.lower())
+        lines += [
+            f"[{label}]",
+            f"   comment = {label}'s space",
+            f"   path = {users_root() / slug}",
+            "   browseable = yes",
+            "   read only = no",
+            f"   valid users = {slug}",
+            "   create mask = 0660",
+            "   directory mask = 0770",
+            "",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def apply_smb_conf() -> None:
+    if not samba_installed():
+        return
+    content = render_smb_conf(load_spaces())
+    run_root(
+        "set -e\n"
+        f"[ -f {SMB_CONF_BACKUP} ] || cp -f {SMB_CONF} {SMB_CONF_BACKUP} 2>/dev/null || true\n"
+        f"cat > {SMB_CONF}\n"
+        "systemctl enable --now smbd.service >/dev/null 2>&1 || true\n"
+        "smbcontrol smbd reload-config >/dev/null 2>&1 || systemctl restart smbd.service\n",
+        stdin_text=content,
+        timeout=120,
+    )
+
+
+def write_smb_password(slug: str, name: str, password: str, adopt: bool) -> None:
+    """Create the Unix + Samba account for a space, or reset its password."""
+    if not samba_installed():
+        raise ValueError("install SMB sharing from the App Store first")
+    if len(password) < 8:
+        raise ValueError("use at least 8 characters for the SMB password")
+    if not adopt and unix_user_exists(slug):
+        raise ValueError("a Unix account with that name already exists, so Orion will not take it over")
+    directory = users_root() / slug
+    run_root(
+        "set -e\n"
+        f"groupadd -f {SMB_GROUP}\n"
+        f"if ! id -u {slug} >/dev/null 2>&1; then\n"
+        f"  useradd --no-create-home --home-dir {directory} --shell /usr/sbin/nologin --user-group {slug}\n"
+        "fi\n"
+        f"usermod -aG {SMB_GROUP} {slug}\n"
+        f"chown {slug}: {directory}\n"
+        "read -r SECRET\n"
+        f'printf "%s\\n%s\\n" "$SECRET" "$SECRET" | smbpasswd -s -a {slug}\n',
+        stdin_text=f"{password}\n",
+        timeout=120,
+    )
+
+
+def drop_samba_account(slug: str) -> None:
+    """Remove the Samba account and the Unix account created for it."""
+    if not samba_installed() or not unix_user_exists(slug):
+        return
+    run_root(
+        "set -e\n"
+        f"smbpasswd -x {slug} >/dev/null 2>&1 || true\n"
+        f"gpasswd -d {slug} {SMB_GROUP} >/dev/null 2>&1 || true\n"
+        f"userdel {slug} >/dev/null 2>&1 || true\n",
+        timeout=120,
+    )
 
 
 def services_facts() -> list[dict]:
@@ -934,6 +1276,7 @@ class Handler(BaseHTTPRequestHandler):
                         "storage": storage,
                         "users": users_facts(self.identity()),
                         "spaces": spaces_facts(),
+                        "apps": apps_facts(),
                         "services": services,
                         "notifications": notifications_facts(storage, services),
                         "roots": [
@@ -1058,11 +1401,29 @@ class Handler(BaseHTTPRequestHandler):
                 space = create_space(self.body())
                 self.json({"ok": True, "space": space}, HTTPStatus.CREATED)
                 return
+            if route.startswith("/api/users/") and route.endswith("/password"):
+                slug = urllib.parse.unquote(route[len("/api/users/") :].removesuffix("/password"))
+                payload = self.body()
+                space = set_space_password(slug, str(payload.get("password") or ""))
+                self.json({"ok": True, "space": space})
+                return
+            if route == "/api/apps":
+                payload = self.body()
+                action = str(payload.get("action") or "")
+                if action not in ("install", "remove"):
+                    self.fail("unknown action")
+                    return
+                app_id = str(payload.get("id") or "")
+                app = install_app(app_id) if action == "install" else remove_app(app_id)
+                self.json({"ok": True, "app": app})
+                return
             self.fail("not found", HTTPStatus.NOT_FOUND)
         except LookupError as error:
             self.fail(str(error), HTTPStatus.NOT_FOUND)
         except ValueError as error:
             self.fail(str(error))
+        except RuntimeError as error:
+            self.fail(str(error), HTTPStatus.BAD_GATEWAY)
         except FileExistsError:
             self.fail("that item already exists", HTTPStatus.CONFLICT)
         except OSError as error:
