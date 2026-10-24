@@ -85,6 +85,8 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
     deleteFiles,
     toggleStar,
     pushToast,
+    mode,
+    loadDirectory,
   } = useApp()
 
   const currentPath = initialPath ?? '/'
@@ -145,6 +147,24 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
     }, 180)
     return () => window.clearTimeout(timer)
   }, [files, highlightId])
+
+  // The host is the source of truth for what is in a directory: ask it every
+  // time the path changes, so a file added over SMB shows up on the next visit.
+  useEffect(() => {
+    if (mode === 'live') void loadDirectory(currentPath)
+  }, [currentPath, loadDirectory, mode])
+
+  const sidebarRoots = useMemo(() => {
+    if (mode !== 'live') return FILE_ROOTS
+    // In live mode the sidebar is whatever the host actually exposes.
+    return files
+      .filter((node) => node.parent === '/' && node.type === 'folder')
+      .map((node) => ({
+        path: `/${node.name}`,
+        label: node.name,
+        icon: 'FolderOpen',
+      }))
+  }, [files, mode])
 
   const breadcrumbs = useMemo(() => {
     const segments = currentPath.split('/').filter(Boolean)
@@ -293,7 +313,7 @@ export function Files({ navigate, initialPath, highlightId }: FilesProps) {
               <span>All files</span>
               <small>{files.filter((file) => file.parent === '/').length}</small>
             </button>
-            {FILE_ROOTS.map((root) => {
+            {sidebarRoots.map((root) => {
               const Icon = iconFor(root.icon)
               const active = currentPath === root.path || currentPath.startsWith(`${root.path}/`)
               return (

@@ -95,7 +95,7 @@ function MetricRing({
   )
 }
 
-function ClockCard() {
+function ClockCard({ uptimeDays }: { uptimeDays: number }) {
   const { settings } = useApp()
   const [now, setNow] = useState(() => new Date())
 
@@ -116,14 +116,17 @@ function ClockCard() {
       <p className="clock-card__date">{formatDay(now)}</p>
       <div className="clock-card__meta">
         <span className="live-dot" aria-hidden="true" />
-        Up 47 days · Orion 1.4
+        Up {uptimeDays} {uptimeDays === 1 ? 'day' : 'days'} · Orion 1.4
       </div>
     </section>
   )
 }
 
 function SystemCard({ onDetails, telemetry }: { onDetails: () => void; telemetry: Telemetry }) {
-  const ramUsed = ((telemetry.ram / 100) * 16).toFixed(1)
+  // Live hosts report their own memory; the demo keeps the 16 GB story.
+  const ramUsed = telemetry.ramUsedGb?.toFixed(1) ?? ((telemetry.ram / 100) * 16).toFixed(1)
+  const ramTotal = telemetry.ramTotalGb ? telemetry.ramTotalGb.toFixed(0) : '16'
+  const temperature = telemetry.temp > 0 ? `${telemetry.temp}°C` : 'no sensor'
 
   return (
     <section className="system-card card" aria-labelledby="system-title">
@@ -138,13 +141,13 @@ function SystemCard({ onDetails, telemetry }: { onDetails: () => void; telemetry
         <MetricRing
           value={telemetry.cpu}
           label="CPU"
-          detail={`${telemetry.cpuClock} GHz · ${telemetry.temp}°C`}
+          detail={`${telemetry.cpuClock} GHz · ${temperature}`}
           tone="accent"
         />
         <MetricRing
           value={telemetry.ram}
           label="RAM"
-          detail={`${ramUsed} / 16 GB`}
+          detail={`${ramUsed} / ${ramTotal} GB`}
           tone="success"
         />
       </div>
@@ -293,12 +296,13 @@ export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardPro
     settings,
     storage,
     pushToast,
+    liveSystem,
   } = useApp()
   const [target, setTarget] = useState('/Downloads')
   const [dragging, setDragging] = useState(false)
   const uploadRef = useRef<HTMLInputElement>(null)
   const monitorApp = APP_BY_ID.get('monitor')
-  const telemetry = useTelemetry()
+  const telemetry = useTelemetry(liveSystem)
 
   const apps = APP_CATALOG.filter((app) => installed[app.id])
   const notices = notifications.slice(0, 3)
@@ -326,7 +330,7 @@ export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardPro
   return (
     <div className="dashboard">
       <aside className="dash-left" aria-label="System widgets">
-        <ClockCard />
+        <ClockCard uptimeDays={telemetry.uptimeDays} />
         <SystemCard
           onDetails={() => monitorApp && onLaunchApp(monitorApp)}
           telemetry={telemetry}
@@ -575,7 +579,7 @@ export function Dashboard({ navigate, onLaunchApp, onOpenPalette }: DashboardPro
             {settings.security.remoteAccess ? 'Remote access enabled' : 'Local network only'}
           </span>
           <span className="dim">·</span>
-          <span>{settings.hostname}</span>
+          <span>{liveSystem?.hostname ?? settings.hostname}</span>
           <span className="dim">·</span>
           <span>
             {formatTb(

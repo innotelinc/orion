@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
@@ -15,6 +16,12 @@ import {
   INITIAL_USERS,
 } from '../data/system'
 import { formatBytes } from '../lib/format'
+import {
+  loadListing,
+  loadLiveSnapshot,
+  type LiveSnapshot,
+  type LiveSystem,
+} from '../lib/live'
 import { usePersistentState } from '../hooks/usePersistentState'
 import type {
   AppDefinition,
@@ -49,7 +56,16 @@ interface AddUserInput {
   role: UserAccount['role']
 }
 
+export type DataMode = 'demo' | 'live'
+
 interface AppContextValue {
+  /** 'live' once a mounted host answers /api/system; 'demo' everywhere else. */
+  mode: DataMode
+  liveSystem: LiveSystem | null
+  /** Fetch one directory from the host (no-op in demo mode). */
+  loadDirectory: (path: string) => Promise<void>
+  /** Re-read the host snapshot after a reconnect. */
+  refreshLive: () => Promise<void>
   settings: Settings
   updateSettings: (patch: Partial<Settings>) => void
   installed: Record<string, InstalledApp>
@@ -234,6 +250,47 @@ export function AppProvider({ children }: { children: ReactNode }) {
   )
   const [toasts, setToasts] = useState<Toast[]>([])
 
+  // Live mode: the installed server is the source of truth. These stay out of
+  // localStorage on purpose — a stale host snapshot must never pose as demo data
+  // (or the other way round) after a reload.
+  const [mode, setMode] = useState<DataMode>('demo')
+  const [liveSystem, setLiveSystem] = useState<LiveSystem | null>(null)
+  const [liveFiles, setLiveFiles] = useState<FileNode[]>([])
+  const [liveUsers, setLiveUsers] = useState<UserAccount[]>([])
+  const [liveStorage, setLiveStorage] = useState<StorageState | null>(null)
+
+  const applySnapshot = useCallback((snapshot: LiveSnapshot) => {
+    setMode('live')
+    setLiveSystem(snapshot.system)
+    setLiveStorage(snapshot.storage)
+    setLiveUsers(snapshot.users)
+    setLiveFiles(snapshot.files)
+  }, [])
+
+  const refreshLive = useCallback(async () => {
+    const snapshot = await loadLiveSnapshot()
+    if (snapshot) applySnapshot(snapshot)
+  }, [applySnapshot])
+
+  useEffect(() => {
+    let cancelled = false
+    loadLiveSnapshot().then((snapshot) => {
+      if (snapshot && !cancelled) applySnapshot(snapshot)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [applySnapshot])
+
+  const loadDirectory = useCallback(async (path: string) => {
+    const listing = await loadListing(path)
+    if (!listing) return
+    setLiveFiles((previous) => [
+      ...previous.filter((node) => node.parent !== listing.path),
+      ...listing.entries,
+    ])
+  }, [])
+
   const updateSettings = useCallback(
     (patch: Partial<Settings>) => {
       setSettings((previous) => ({ ...previous, ...patch }))
@@ -257,6 +314,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const dismissToast = useCallback((id: string) => {
     setToasts((previous) => previous.filter((toast) => toast.id !== id))
   }, [])
+
+  const LIVE_READ_ONLY =
+    'This screen is reading a real host. Orion reports on it and never writes to it.'
+
+  /** Refuse a filesystem/pool/user mutation while live, loudly. */
+  const blockLive = useCallback((): ActionResult | null => {
+    if (mode !== 'live') return null
+    pushToast({ title: 'Read-only live mount', description: LIVE_READ_ONLY, tone: 'info' })
+    return { ok: false, error: LIVE_READ_ONLY }
+  }, [mode, pushToast])
 
   const installApp = useCallback(
     (app: AppDefinition) => {
@@ -317,6 +384,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const addFolder = useCallback(
     (parent: string, rawName: string): ActionResult => {
+      const blocked = blockLive()
+      if (blocked) return blocked
       const name = rawName.trim()
       if (!name) return { ok: false, error: 'Give the folder a name.' }
       if (name.length > 80) return { ok: false, error: 'Keep names under 80 characters.' }
@@ -340,11 +409,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       pushToast({ title: 'Folder created', description: joinPath(parent, name), tone: 'success' })
       return { ok: true }
     },
-    [files, pushToast, setFiles],
+    [blockLive, files, pushToast, setFiles],
   )
 
   const addUploads = useCallback(
     (parent: string, uploads: Array<{ name: string; size: number }>) => {
+      if (blockLive()) return 0
       if (!uploads.length) return 0
       const existing = new Set(
         files.filter((node) => node.parent === parent).map((node) => node.name.toLowerCase()),
@@ -372,11 +442,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       })
       return nodes.length
     },
-    [files, pushToast, setFiles],
+    [blockLive, files, pushToast, setFiles],
   )
 
   const renameFile = useCallback(
     (id: string, rawName: string): ActionResult => {
+      const blocked = blockLive()
+      if (blocked) return blocked
       const name = rawName.trim()
       if (!name) return { ok: false, error: 'Name cannot be empty.' }
       if (/[\\/]/.test(name)) return { ok: false, error: 'Names cannot contain slashes.' }
@@ -404,11 +476,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       pushToast({ title: 'Renamed', description: name, tone: 'success' })
       return { ok: true }
     },
-    [files, pushToast, setFiles],
+    [blockLive, files, pushToast, setFiles],
   )
 
   const deleteFiles = useCallback(
     (ids: string[]) => {
+      if (blockLive()) return 0
       if (!ids.length) return 0
       const idSet = new Set(ids)
       const selected = files.filter((node) => idSet.has(node.id))
@@ -430,20 +503,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
       })
       return removed
     },
-    [files, pushToast, setFiles],
+    [blockLive, files, pushToast, setFiles],
   )
 
   const toggleStar = useCallback(
     (id: string) => {
-      setFiles((previous) =>
-        previous.map((node) => (node.id === id ? { ...node, starred: !node.starred } : node)),
-      )
+      const toggle = (nodes: FileNode[]) =>
+        nodes.map((node) => (node.id === id ? { ...node, starred: !node.starred } : node))
+      if (mode === 'live') {
+        setLiveFiles(toggle)
+        return
+      }
+      setFiles(toggle)
     },
-    [setFiles],
+    [mode, setFiles],
   )
 
   const assignDisks = useCallback(
     (diskIds: string[], poolName: string): ActionResult => {
+      const blocked = blockLive()
+      if (blocked) return blocked
       if (!diskIds.length) return { ok: false, error: 'Select at least one disk.' }
       const pool = storage.pools.find((item) => item.name === poolName)
       if (!pool) return { ok: false, error: 'Choose a pool for these disks.' }
@@ -469,11 +548,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       })
       return { ok: true }
     },
-    [pushToast, setStorage, storage.disks, storage.pools],
+    [blockLive, pushToast, setStorage, storage.disks, storage.pools],
   )
 
   const createPool = useCallback(
     (rawName: string, diskIds: string[]): ActionResult => {
+      const blocked = blockLive()
+      if (blocked) return blocked
       const name = rawName.trim()
       if (!name) return { ok: false, error: 'Give the pool a name.' }
       if (storage.pools.some((pool) => pool.name.toLowerCase() === name.toLowerCase())) {
@@ -516,11 +597,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       })
       return { ok: true }
     },
-    [pushToast, setStorage, storage.disks, storage.pools],
+    [blockLive, pushToast, setStorage, storage.disks, storage.pools],
   )
 
   const addUser = useCallback(
     (input: AddUserInput): ActionResult => {
+      const blocked = blockLive()
+      if (blocked) return blocked
       const name = input.name.trim()
       const email = input.email.trim().toLowerCase()
       if (name.length < 2) return { ok: false, error: 'Enter a name with at least 2 characters.' }
@@ -545,11 +628,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       pushToast({ title: `${name} invited`, description: `${email} · ${input.role}`, tone: 'success' })
       return { ok: true }
     },
-    [pushToast, setUsers, users],
+    [blockLive, pushToast, setUsers, users],
   )
 
   const removeUser = useCallback(
     (id: string): ActionResult => {
+      const blocked = blockLive()
+      if (blocked) return blocked
       const user = users.find((item) => item.id === id)
       if (!user) return { ok: false, error: 'User not found.' }
       if (user.isCurrent) return { ok: false, error: 'You cannot remove your own account.' }
@@ -558,7 +643,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       pushToast({ title: `${user.name} removed`, description: 'Their share permissions were revoked.', tone: 'info' })
       return { ok: true }
     },
-    [pushToast, setUsers, users],
+    [blockLive, pushToast, setUsers, users],
   )
 
   const dismissNotification = useCallback(
@@ -580,6 +665,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   )
 
   const resetDemo = useCallback(() => {
+    if (mode === 'live') {
+      void refreshLive()
+      pushToast({
+        title: 'Reloaded from the host',
+        description: 'Live data was re-read from the mounted roots.',
+        tone: 'info',
+      })
+      return
+    }
     for (const key of Object.values(KEYS)) {
       try {
         window.localStorage.removeItem(key)
@@ -588,26 +682,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     }
     window.location.reload()
-  }, [])
+  }, [mode, pushToast, refreshLive])
 
   const value = useMemo<AppContextValue>(
     () => ({
+      mode,
+      liveSystem,
+      loadDirectory,
+      refreshLive,
       settings,
       updateSettings,
       installed,
       installApp,
       uninstallApp,
       toggleAppRunning,
-      files,
+      files: mode === 'live' ? liveFiles : files,
       addFolder,
       addUploads,
       renameFile,
       deleteFiles,
       toggleStar,
-      storage,
+      storage: liveStorage ?? storage,
       assignDisks,
       createPool,
-      users,
+      users: mode === 'live' ? liveUsers : users,
       addUser,
       removeUser,
       notifications,
@@ -620,21 +718,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
       resetDemo,
     }),
     [
+      mode,
+      liveSystem,
+      loadDirectory,
+      refreshLive,
       settings,
       updateSettings,
       installed,
       installApp,
       uninstallApp,
       toggleAppRunning,
+      liveFiles,
       files,
       addFolder,
       addUploads,
       renameFile,
       deleteFiles,
       toggleStar,
+      liveStorage,
       storage,
       assignDisks,
       createPool,
+      liveUsers,
       users,
       addUser,
       removeUser,

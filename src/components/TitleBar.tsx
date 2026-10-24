@@ -150,9 +150,12 @@ interface TitleBarProps {
 }
 
 export function TitleBar({ resolvedTheme, onToggleTheme, onOpenPalette, navigate }: TitleBarProps) {
-  const { settings, users } = useApp()
+  const { settings, users, mode, liveSystem } = useApp()
   const currentUser = users.find((user) => user.isCurrent) ?? users[0]
-  const address = settings.network.ip
+  const hostname = liveSystem?.hostname ?? settings.hostname
+  const address = liveSystem
+    ? `${liveSystem.cpu.cores} cores · ${liveSystem.arch}`
+    : settings.network.ip
 
   return (
     <header className="titlebar">
@@ -181,11 +184,11 @@ export function TitleBar({ resolvedTheme, onToggleTheme, onOpenPalette, navigate
           type="button"
           className="device-chip"
           onClick={() => navigate('settings', { tab: 'general' })}
-          title={`${settings.hostname} · ${address}`}
+          title={`${hostname} · ${address}`}
         >
           <Server size={14} aria-hidden="true" />
           <span className="device-chip__copy">
-            <strong>{settings.hostname}</strong>
+            <strong>{hostname}</strong>
             <span>{address}</span>
           </span>
           <span className="device-chip__status" aria-label="System online" />
@@ -206,9 +209,16 @@ export function TitleBar({ resolvedTheme, onToggleTheme, onOpenPalette, navigate
       </button>
 
       <div className="titlebar__actions">
-        <span className="titlebar__system">
+        <span
+          className="titlebar__system"
+          title={
+            mode === 'live'
+              ? 'Reading this machine: real files, disks and metrics'
+              : 'No server detected — showing the built-in demo dataset'
+          }
+        >
           <span className="live-dot" aria-hidden="true" />
-          Online
+          {mode === 'live' ? 'Live host' : 'Demo data'}
         </span>
         <button
           type="button"

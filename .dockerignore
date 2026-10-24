@@ -8,4 +8,5 @@ dist
 *.tsbuildinfo
 README.md
 Dockerfile
+docker-compose.yml
 .dockerignore

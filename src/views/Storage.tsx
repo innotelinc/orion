@@ -199,7 +199,8 @@ function AddDiskWizard({ open, onClose, initialDiskId, initialPool }: WizardProp
                       <strong>{disk.name}</strong>
                       <span>{disk.model}</span>
                       <span className="disk-option__meta">
-                        {disk.kind} · {disk.temperature}°C · {formatTb(disk.capacityTb, 0)}
+                        {disk.kind} · {disk.temperature > 0 ? `${disk.temperature}°C` : 'no sensor'} ·{' '}
+                        {formatTb(disk.capacityTb, 0)}
                       </span>
                     </span>
                     <span className="disk-option__check" aria-hidden="true">
@@ -396,7 +397,7 @@ export function Storage() {
       setScanningId(null)
       pushToast({
         title: `SMART check passed · ${disk.name}`,
-        description: `${disk.temperature}°C · 0 reallocated sectors · no errors in the last 30 days.`,
+        description: `${disk.temperature > 0 ? `${disk.temperature}°C · ` : ''}0 reallocated sectors · no errors in the last 30 days.`,
         tone: 'success',
       })
     }, 1600)
@@ -631,7 +632,7 @@ export function Storage() {
                     </td>
                     <td className="tabular">
                       <span className={classNames('disk-temp', disk.temperature >= 40 && 'is-warm')}>
-                        {disk.temperature}°C
+                        {disk.temperature > 0 ? `${disk.temperature}°C` : '—'}
                       </span>
                     </td>
                     <td>

@@ -1,0 +1,17 @@
+# Orion reads the folders you mount here. Mount them `:ro` — the server has no
+# write endpoint, and the mount makes that a property of the kernel rather than
+# a promise from the UI.
+services:
+  orion:
+    build: .
+    image: orion:latest
+    container_name: orion
+    ports:
+      - "8080:8080"
+    environment:
+      # Every root becomes a folder in the sidebar, named after its directory.
+      ORION_ROOTS: /data/media:/data/backups
+    volumes:
+      - /mnt/media:/data/media:ro
+      - /mnt/backups:/data/backups:ro
+    restart: unless-stopped
