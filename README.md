@@ -58,7 +58,8 @@ The dev server proxies `/api` to `http://127.0.0.1:8099` by default; set
 | `GET /api/files/content?path=` | download, or `&inline=1` for previews |
 | `POST /api/services` | start/stop/restart a unit |
 | `POST /api/apps` | install or remove a catalogue app with apt |
-| `POST /api/users/{slug}/password` | create or reset that space's Samba account |
+| `POST /api/users/{slug}/password` | create or reset that space's Samba account and sign-in |
+| `POST /api/users/{slug}/role` | appoint an agency admin, or put one back to member (platform admin only) |
 | `POST /api/users` | create a person's folder and record it in `.orion/spaces.json` |
 | `DELETE /api/users/{slug}` | move that folder to `.orion/trash` and forget it |
 
@@ -291,7 +292,8 @@ Authentik decides both who gets through the gate and who can administer the
 directory, and those are deliberately two different lists:
 
 - **The gate.** `oauth2-proxy` allows `Incus`, `Cerulean` and `authentik Admins`, so
-  any Authentik administrator opens the NAS without also joining a host group.
+  any Authentik administrator opens the NAS without also joining a host group, plus
+  `orion-users` for people an administrator adds in Settings → Users.
 - **The directory.** `authentik Admins` is the **only** group that may carry
   Authentik's superuser flag. A tenant group flagged that way makes its membership a
   global administrator grant in disguise — `plutus-admins` and `signara-admins` were
@@ -326,7 +328,36 @@ so a fresh install cannot lock itself out. An agency admin is a space whose
 space they create is the agency other people are filed under.
 
 Settings → Users shows the role of the current session and states its scope, and
-only offers the buttons the API would accept.
+only offers the buttons the API would accept. A platform admin gets **Promote** /
+**Demote** on every row, which is `POST /api/users/{slug}/role`: promoting makes
+that space the agency other people can be filed under, and demoting releases
+everyone filed under it — their folders are untouched, they simply become
+unfiled. `Platform admin` is refused there on purpose; it is the provider group's
+grant, not a row in this registry.
+
+### Sign-in for the people an admin adds
+
+A space is a folder. When the host has directory credentials, adding somebody
+with an email and a password also creates their account in the identity provider
+and puts it in one group the edge proxy lets through (`orion-users`), using the
+same password for the share and the sign-in. Resetting the password moves both;
+removing the person deletes the directory account *and* moves the folder to
+Trash. Without credentials on the host, `spaces` behave exactly as before: a
+folder, and no sign-in.
+
+Credentials live in the vault, not in the repo or the container image:
+`cerulean/orion` holds `authentik_api_url`, `authentik_token` and `group`. On the
+NAS the API reads them from `/etc/orion/sso-admin.env` (0600), which is written
+from the vault. `deploy/sso/provision-orion-access.py` creates the group, a
+service account and a token for it, stores them there, and *verifies* the
+credential: it must be able to create a user, set a password, join the group and
+delete it, and it must not be able to make itself a superuser or mint a token for
+anyone else. The role it gets is deliberately without `change_user` — that
+permission would let the service account escalate itself in one PATCH.
+
+The proxy has to allow the group too, or a provisioned account is refused before
+it reaches the desktop: `--allowed-group=orion-users` sits beside `Incus`,
+`Cerulean` and `authentik Admins` in `orion-sso`.
 
 Two things watch that. `deploy/sso/authentik-audit.py` is the read-only human audit: who
 is privileged, who is dormant, which group is the widest, and whether any non-human
@@ -342,6 +373,7 @@ temporary account it used has been deleted.
 ```bash
 npm run typecheck
 npm run build
+python3 -m unittest discover -s server/tests -v   # the role rules, on a temp data root
 node scripts/smoke-dom.mjs   # renders the bundle in jsdom against the live API
 ```
 

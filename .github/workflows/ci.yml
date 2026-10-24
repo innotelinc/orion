@@ -15,8 +15,9 @@ concurrency:
 
 # The desktop is served from the nas container by nginx in front of
 # orion-api.py, so what CI can prove from here is that the bundle typechecks and
-# builds. The API's own behaviour is covered by scripts/smoke-dom.mjs, which
-# needs a running orion-api and the container's real payloads.
+# builds. The API's role rules are unit-tested against a temporary data root;
+# the rest of its behaviour is covered by scripts/smoke-dom.mjs, which needs a
+# running orion-api and the container's real payloads.
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -36,3 +37,18 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  # Who may administer whom is the one part of the API that is pure logic, so it
+  # is tested here rather than only on the box: every test builds a throwaway
+  # /srv/storage in a temp directory.
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Role rules
+        run: python3 -m unittest discover -s server/tests -v

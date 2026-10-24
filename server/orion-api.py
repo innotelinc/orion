@@ -29,6 +29,7 @@ import subprocess
 import threading
 import time
 import unicodedata
+import urllib.error
 import urllib.parse
 from collections import deque
 from http import HTTPStatus
@@ -772,6 +773,7 @@ def space_facts(space: dict, index: int, session: dict | None = None) -> dict:
         "email": str(space.get("email") or ""),
         "role": normalise_role(space.get("role")),
         "agency": str(space.get("agency") or ""),
+        "signin": str(space.get("signin") or ""),
         "manageable": can_manage_space(space, session) if session else False,
         "path": f"/{USERS_DIR_NAME}/{slug}",
         "usedBytes": folder_bytes(users_root() / slug),
@@ -836,12 +838,23 @@ def create_space(payload: dict, session: dict | None = None) -> dict:
         counter += 1
     password = str(payload.get("password") or "")
     (root / slug).mkdir()
+    signin = ""
     try:
         if password:
             write_smb_password(slug, name, password, adopt=False)
+        # A person with an address can sign in as well as mount the share, but
+        # only where the host has directory credentials. One password for both,
+        # and the account is born in the group the edge proxy lets through.
+        if password and email and directory_ready():
+            signin = create_signin(slug, name, email, password)
         smb = bool(password)
-    except (ValueError, RuntimeError):
-        # Nothing half-created: the folder goes back if the account did not.
+    except (ValueError, RuntimeError, LookupError):
+        # Nothing half-created: the folder and any Unix account it made go back.
+        if password:
+            try:
+                drop_samba_account(slug)
+            except (OSError, RuntimeError, subprocess.SubprocessError):
+                pass
         shutil.rmtree(root / slug, ignore_errors=True)
         raise
 
@@ -858,6 +871,7 @@ def create_space(payload: dict, session: dict | None = None) -> dict:
         "color": SPACE_PALETTE[len(spaces) % len(SPACE_PALETTE)],
         "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "smb": smb,
+        "signin": signin,
     }
     save_spaces([*spaces, space])
     if smb:
@@ -877,6 +891,11 @@ def delete_space(slug: str, session: dict | None = None) -> dict:
     if not can_manage_space(space, session):
         raise PermissionError("you can only remove people in your own agency")
 
+    if space.get("signin"):
+        # Stop the sign-in before the folder goes: a live login with no space
+        # would still open the desktop. An unreachable directory aborts the
+        # removal rather than leaving an account nobody can see any more.
+        disable_signin(str(space["signin"]))
     if space.get("smb"):
         drop_samba_account(slug)
     target = users_root() / slug
@@ -897,7 +916,12 @@ def delete_space(slug: str, session: dict | None = None) -> dict:
 
 
 def set_space_password(slug: str, password: str, session: dict | None = None) -> dict:
-    """Give an existing space an SMB account, or reset the one it has."""
+    """Give an existing space an SMB account, or reset the one it has.
+
+    A space that also has a directory account keeps one password: the same one
+    signs in at the edge and opens the share, which is what an administrator
+    handing somebody a password expects.
+    """
     session = session or session_facts(None)
     spaces = load_spaces()
     space = next((item for item in spaces if str(item["slug"]) == slug), None)
@@ -909,9 +933,199 @@ def set_space_password(slug: str, password: str, session: dict | None = None) ->
         slug, str(space.get("name") or slug), password, adopt=bool(space.get("smb"))
     )
     space["smb"] = True
+    if space.get("signin"):
+        # The share and the sign-in are one credential; a reset that only moved
+        # half of it would lock the person out of the desktop they still mount.
+        update_signin_password(str(space["signin"]), password)
     save_spaces(spaces)
     apply_smb_conf()
     return space_facts(space, spaces.index(space), session)
+
+
+def set_space_role(
+    slug: str, role: object, session: dict | None = None, agency: object = ""
+) -> dict:
+    """Appoint an agency admin, or put one back to member.
+
+    Only a platform admin may do this. Appointing is what makes a space the
+    agency other people can be filed under; demoting releases everyone who was
+    filed under it, because an agency cannot exist without its administrator.
+    """
+    session = session or session_facts(None)
+    permissions = session.get("permissions") or {}
+    if permissions.get("scope") != "all":
+        raise PermissionError("only a platform admin can appoint an agency admin")
+    spaces = load_spaces()
+    space = next((item for item in spaces if str(item["slug"]) == slug), None)
+    if space is None:
+        raise LookupError("that person has no space on this host")
+    # Checked before normalising: an unknown string would quietly become
+    # "Member", and a demotion is not what somebody asking for platform admin
+    # should get.
+    if str(role or "").strip().lower() == PLATFORM_ROLE.lower():
+        raise ValueError("platform admin is granted by the provider group, not here")
+    wanted = normalise_role(role)
+    if wanted == AGENCY_ROLE:
+        space["role"] = AGENCY_ROLE
+        space["agency"] = str(space["slug"])
+    else:
+        space["role"] = wanted
+        space["agency"] = ""
+        for item in spaces:
+            if str(item.get("agency") or "") == str(space["slug"]):
+                # Same rule as removing the space: people keep their folders,
+                # but nobody is left filed under an administrator who is gone.
+                item["agency"] = ""
+    save_spaces(spaces)
+    return space_facts(space, spaces.index(space), session)
+
+
+# ------------------------------------------------------------ sign-in directory
+#
+# A space is a folder; sign-in belongs to the identity provider. When an
+# administrator adds somebody with a password, the same account is created in
+# the directory and put in one group the edge proxy lets through, so the address
+# the proxy forwards is the address this registry already knows. Unconfigured
+# (no directory credentials on the host) the desktop behaves exactly as before:
+# spaces only, and adding a person is a folder.
+
+DIRECTORY_ENV = Path(os.environ.get("ORION_AUTHENTIK_ENV", "/etc/orion/sso-admin.env"))
+SIGNIN_GROUP = "orion-users"
+
+
+def directory_settings() -> dict:
+    """Where the directory is and how to reach it; empty when not set up."""
+    settings = {
+        "url": os.environ.get("ORION_AUTHENTIK_URL", "").strip(),
+        "token": os.environ.get("ORION_AUTHENTIK_TOKEN", "").strip(),
+        "group": os.environ.get("ORION_AUTHENTIK_GROUP", SIGNIN_GROUP).strip() or SIGNIN_GROUP,
+    }
+    if (not settings["url"] or not settings["token"]) and DIRECTORY_ENV.is_file():
+        try:
+            for line in DIRECTORY_ENV.read_text(encoding="utf-8").splitlines():
+                if line.lstrip().startswith("#") or "=" not in line:
+                    continue
+                name, _, value = line.partition("=")
+                name = name.strip()
+                value = value.strip().strip('"').strip("'")
+                if name == "ORION_AUTHENTIK_URL" and not settings["url"]:
+                    settings["url"] = value
+                elif name == "ORION_AUTHENTIK_TOKEN" and not settings["token"]:
+                    settings["token"] = value
+                elif name == "ORION_AUTHENTIK_GROUP" and value:
+                    settings["group"] = value
+        except OSError:
+            pass
+    if settings["url"] and not settings["url"].rstrip("/").endswith("/api/v3"):
+        settings["url"] = settings["url"].rstrip("/") + "/api/v3"
+    return settings
+
+
+def directory_ready() -> bool:
+    settings = directory_settings()
+    return bool(settings["url"] and settings["token"])
+
+
+def directory_call(path: str, method: str = "GET", body: object = None) -> object:
+    """One request to the provider's API. Never logs the token."""
+    settings = directory_settings()
+    if not (settings["url"] and settings["token"]):
+        raise RuntimeError("sign-in provisioning is not configured on this host")
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(settings["url"] + path, data=data, method=method)
+    request.add_header("Authorization", "Bearer " + settings["token"])
+    request.add_header("Accept", "application/json")
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            raw = response.read().decode("utf-8", "replace")
+            return json.loads(raw) if raw.strip() else {}
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", "replace")[:300]
+        if error.code == 404:
+            raise LookupError(f"the directory has no such record ({path})")
+        raise ValueError(f"the directory refused that change: {detail}") from None
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise RuntimeError(f"the directory is unreachable: {error.reason}") from None
+
+
+def directory_user(username: str) -> dict | None:
+    found = directory_call(f"/core/users/?username={urllib.parse.quote(username)}")
+    for user in (found or {}).get("results") or []:
+        if str(user.get("username")) == username:
+            return user
+    return None
+
+
+def directory_group(name: str | None = None) -> dict:
+    """The group the edge proxy lets through.
+
+    It is made once by the host's setup (deploy/sso/provision-orion-access.py),
+    not here: the credential this service holds may add people to groups but
+    must not create them, or it could create one that grants superuser.
+    """
+    wanted = name or directory_settings()["group"]
+    found = directory_call(f"/core/groups/?name={urllib.parse.quote(wanted)}")
+    for group in (found or {}).get("results") or []:
+        if str(group.get("name")) == wanted:
+            return group
+    raise LookupError(
+        f"the directory has no {wanted} group; run the host setup before adding people"
+    )
+
+
+def create_signin(username: str, name: str, email: str, password: str) -> str:
+    """Create the directory account a space signs in with; returns its username.
+
+    The credential this runs under cannot edit users (editing would let it grant
+    itself superuser), so membership goes through the group's own endpoint and a
+    name left over from an earlier removal is deleted rather than reused.
+    """
+    group = directory_group()
+    existing = directory_user(username)
+    if existing is not None:
+        directory_call(f"/core/users/{existing['pk']}/", "DELETE")
+    created = directory_call(
+        "/core/users/",
+        "POST",
+        {
+            "username": username,
+            "name": name,
+            "email": email,
+            "path": "users",
+            "type": "internal",
+        },
+    )
+    try:
+        directory_call(f"/core/groups/{group['pk']}/add_user/", "POST", {"pk": created["pk"]})
+        directory_call(f"/core/users/{created['pk']}/set_password/", "POST", {"password": password})
+    except (ValueError, LookupError, RuntimeError):
+        # No half-made sign-in: an account with no group or no password could
+        # not reach the desktop, and the space would claim one that does not work.
+        try:
+            directory_call(f"/core/users/{created['pk']}/", "DELETE")
+        except (ValueError, LookupError, RuntimeError):
+            pass
+        raise
+    return str(created.get("username") or username)
+
+
+def update_signin_password(username: str, password: str) -> None:
+    user = directory_user(username)
+    if user is None:
+        raise ValueError("the directory has no account for that person any more")
+    directory_call(f"/core/users/{user['pk']}/set_password/", "POST", {"password": password})
+
+
+def disable_signin(username: str) -> None:
+    """End the sign-in. The account is deleted, not merely deactivated: the
+    credential may not edit users, and an inactive account would block the same
+    person being added again later."""
+    user = directory_user(username)
+    if user is None:
+        return
+    directory_call(f"/core/users/{user['pk']}/", "DELETE")
 
 
 # -------------------------------------------------------------- app catalogue
@@ -1955,6 +2169,10 @@ class Handler(BaseHTTPRequestHandler):
                         "files": nodes,
                         "storage": storage,
                         "session": session,
+                        "signin": {
+                            "available": directory_ready(),
+                            "group": directory_settings()["group"],
+                        },
                         "users": users_facts(identity, session),
                         "spaces": spaces_facts(session),
                         "apps": apps_facts(),
@@ -2088,6 +2306,13 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self.body()
                 session = session_facts(self.identity())
                 space = set_space_password(slug, str(payload.get("password") or ""), session)
+                self.json({"ok": True, "space": space})
+                return
+            if route.startswith("/api/users/") and route.endswith("/role"):
+                slug = urllib.parse.unquote(route[len("/api/users/") :].removesuffix("/role"))
+                payload = self.body()
+                session = session_facts(self.identity())
+                space = set_space_role(slug, payload.get("role"), session)
                 self.json({"ok": True, "space": space})
                 return
             if route == "/api/apps":

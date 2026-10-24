@@ -16,6 +16,7 @@ import {
   SlidersHorizontal,
   Sun,
   Trash2,
+  UserCog,
   UserPlus,
   Users,
 } from 'lucide-react'
@@ -115,6 +116,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
     settings,
     updateSettings,
     session,
+    signin,
     system,
     services,
     users,
@@ -123,6 +125,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
     addSpace,
     removeSpace,
     setSpacePassword,
+    setSpaceRole,
     pushToast,
     storage,
     refresh,
@@ -141,6 +144,9 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
   const [spaceOpen, setSpaceOpen] = useState(false)
   const [removeSpaceTarget, setRemoveSpaceTarget] = useState<Space | null>(null)
   const [spaceBusy, setSpaceBusy] = useState(false)
+  const [roleTarget, setRoleTarget] = useState<Space | null>(null)
+  const [roleValue, setRoleValue] = useState<UserRole>('Member')
+  const [roleError, setRoleError] = useState<string | null>(null)
   const [passwordTarget, setPasswordTarget] = useState<Space | null>(null)
   const [passwordValue, setPasswordValue] = useState('')
   const [passwordError, setPasswordError] = useState<string | null>(null)
@@ -170,6 +176,18 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
     }
     setPasswordTarget(null)
     setPasswordValue('')
+  }
+
+  const submitRole = async () => {
+    if (!roleTarget) return
+    setSpaceBusy(true)
+    const result = await setSpaceRole(roleTarget.id, roleValue)
+    setSpaceBusy(false)
+    if (!result.ok) {
+      setRoleError(result.error ?? 'The host refused that change.')
+      return
+    }
+    setRoleTarget(null)
   }
 
   const submitSpace = async () => {
@@ -635,6 +653,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                           <span>
                             {space.path} · {formatBytes(space.usedBytes)} stored
                             {space.smb ? ' · SMB share' : ''}
+                            {space.signin ? ` · signs in as ${space.signin}` : ''}
                             {space.agency
                               ? ` · under ${spaces.find((item) => item.slug === space.agency)?.name ?? space.agency}`
                               : ''}
@@ -663,6 +682,25 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                           >
                             <KeyRound size={13} aria-hidden="true" />
                             {space.smb ? 'SMB' : 'Enable SMB'}
+                          </button>
+                        ) : null}
+                        {platformWide ? (
+                          <button
+                            type="button"
+                            className="button button--sm button--ghost"
+                            title={
+                              space.role === 'Agency admin'
+                                ? `Stop ${space.name} administering an agency`
+                                : `Let ${space.name} administer an agency`
+                            }
+                            onClick={() => {
+                              setRoleTarget(space)
+                              setRoleValue(space.role === 'Agency admin' ? 'Member' : 'Agency admin')
+                              setRoleError(null)
+                            }}
+                          >
+                            <UserCog size={13} aria-hidden="true" />
+                            {space.role === 'Agency admin' ? 'Demote' : 'Promote'}
                           </button>
                         ) : null}
                         {space.manageable !== false ? (
@@ -983,7 +1021,7 @@ systemctl reload nginx`}
           />
         </div>
         <div className="field">
-          <label htmlFor="space-password">SMB password (optional)</label>
+          <label htmlFor="space-password">Password (optional)</label>
           <input
             id="space-password"
             className="input"
@@ -997,9 +1035,13 @@ systemctl reload nginx`}
             placeholder="at least 8 characters"
           />
           <span className="field__hint">
-            {smbApp?.installed
-              ? 'Creates their Samba account and share. Leave it empty for a folder only.'
-              : 'Install SMB sharing in the App Store to give spaces network access.'}
+            {signin.available && spaceForm.email.trim()
+              ? `One password for their share and their sign-in. It creates the account in ${signin.group}.`
+              : signin.available
+                ? `Add an email and this also creates their sign-in in ${signin.group}. Leave it empty for a folder only.`
+                : smbApp?.installed
+                  ? 'Creates their Samba account and share. Leave it empty for a folder only.'
+                  : 'Install SMB sharing in the App Store to give spaces network access.'}
           </span>
         </div>
         <div className="field">
@@ -1057,12 +1099,67 @@ systemctl reload nginx`}
       </Modal>
 
       <Modal
+        open={Boolean(roleTarget)}
+        onClose={() => setRoleTarget(null)}
+        title={roleTarget ? `Change the role of ${roleTarget.name}` : 'Change role'}
+        description="A role decides which accounts this person may administer; it never hides files from them."
+        size="sm"
+        footer={
+          <>
+            <button type="button" className="button" onClick={() => setRoleTarget(null)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={spaceBusy || !roleTarget || roleTarget.role === roleValue}
+              onClick={() => void submitRole()}
+            >
+              <UserCog size={14} aria-hidden="true" />
+              Save role
+            </button>
+          </>
+        }
+      >
+        <div className="field">
+          <label htmlFor="space-role-set">Role</label>
+          <select
+            id="space-role-set"
+            className="input"
+            value={roleValue}
+            onChange={(event) => {
+              setRoleValue(event.target.value as UserRole)
+              setRoleError(null)
+            }}
+          >
+            {(['Agency admin', 'Member', 'Guest'] as UserRole[]).map((role) => (
+              <option key={role} value={role}>
+                {role}
+              </option>
+            ))}
+          </select>
+          <span className="field__hint">
+            {roleValue === 'Agency admin'
+              ? `${roleTarget?.name ?? 'They'} can add, remove and re-key the people filed under ${roleTarget?.name ?? 'them'} — and nobody else.`
+              : 'Anyone filed under their agency becomes unfiled. Their folders and shares are untouched.'}
+          </span>
+        </div>
+        {roleError ? (
+          <span className="field__error" role="alert">
+            {roleError}
+          </span>
+        ) : null}
+      </Modal>
+
+      <Modal
         open={Boolean(passwordTarget)}
         onClose={() => setPasswordTarget(null)}
         title={passwordTarget?.smb ? 'Change SMB password' : 'Give this space SMB access'}
         description={
           passwordTarget
-            ? `${passwordTarget.name} will sign in to their own share as “${passwordTarget.slug}”.`
+            ? passwordTarget.signin
+              ? `${passwordTarget.name} uses this for their share and their sign-in (${passwordTarget.signin}).`
+              : `${passwordTarget.name} will sign in to their own share as “${passwordTarget.slug}”.`
             : undefined
         }
         size="sm"

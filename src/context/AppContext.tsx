@@ -67,6 +67,8 @@ interface AppContextValue {
   roots: RootEntry[]
   storage: StorageState
   session: Session
+  /** Whether this host can create directory accounts, and the group it uses. */
+  signin: { available: boolean; group: string }
   users: UserAccount[]
   spaces: Space[]
   apps: AppEntry[]
@@ -90,6 +92,7 @@ interface AppContextValue {
   }) => Promise<ActionResult>
   removeSpace: (id: string) => Promise<ActionResult>
   setSpacePassword: (id: string, password: string) => Promise<ActionResult>
+  setSpaceRole: (id: string, role: UserRole) => Promise<ActionResult>
   installApp: (id: string) => Promise<ActionResult>
   removeApp: (id: string) => Promise<ActionResult>
   dismissNotification: (id: string) => void
@@ -139,6 +142,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       agency: '',
       permissions: { manageUsers: false, scope: 'none', agency: '' },
     },
+    signin: { available: false, group: 'orion-users' },
     users: [],
     spaces: [],
     apps: [],
@@ -403,9 +407,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await loadState()
         pushToast({
           title: `${space.name} has a space`,
-          description: space.smb
-            ? `${space.path} is ready, and shared over SMB.`
-            : `${space.path} is ready for their files.`,
+          description: space.signin
+            ? `${space.path} is ready, shared over SMB, and can sign in as ${space.signin}.`
+            : space.smb
+              ? `${space.path} is ready, and shared over SMB.`
+              : `${space.path} is ready for their files.`,
           tone: 'success',
         })
         return { ok: true }
@@ -434,6 +440,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return {
           ok: false,
           error: failure instanceof Error ? failure.message : 'The host refused to delete it.',
+        }
+      }
+    },
+    [loadState, pushToast],
+  )
+
+  const setSpaceRole = useCallback(
+    async (id: string, role: UserRole): Promise<ActionResult> => {
+      try {
+        const { space } = await api.setSpaceRole(id, role)
+        await loadState()
+        pushToast({
+          title: `${space.name} is now ${space.role.toLowerCase()}`,
+          description:
+            space.role === 'Agency admin'
+              ? 'They can add and remove the people filed under them.'
+              : 'People filed under them are now unfiled; their folders are untouched.',
+          tone: 'success',
+        })
+        return { ok: true }
+      } catch (failure) {
+        return {
+          ok: false,
+          error:
+            failure instanceof Error
+              ? failure.message
+              : 'The host refused to change that role.',
         }
       }
     },
@@ -538,6 +571,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       roots: state.roots,
       storage: state.storage,
       session: state.session,
+      signin: state.signin,
       users: state.users,
       spaces: state.spaces,
       apps: state.apps,
@@ -555,6 +589,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addSpace,
       removeSpace,
       setSpacePassword,
+      setSpaceRole,
       installApp,
       removeApp,
       dismissNotification,
@@ -584,6 +619,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addSpace,
       removeSpace,
       setSpacePassword,
+      setSpaceRole,
       installApp,
       removeApp,
       dismissNotification,

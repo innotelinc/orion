@@ -95,6 +95,8 @@ export interface Space {
   color: string
   /** True when the space also has a Samba account and an exported share. */
   smb: boolean
+  /** Provider username when this space can also sign in, else ''. */
+  signin?: string
   /** Slug of the agency admin this person is filed under, if any. */
   agency?: string
   /** Whether the session may remove or re-key this person. */

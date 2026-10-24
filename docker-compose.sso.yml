@@ -45,4 +45,6 @@ services:
       OAUTH2_PROXY_SCOPE: openid email profile groups
       OAUTH2_PROXY_SILENCE_PING_LOGGING: "true"
       # Optional: OIDC_ALLOWED_GROUP=GroupName restricts sign-in to one group.
+      # More than one group needs repeated --allowed-group flags rather than
+      # this variable (compose `command:`), which is how the estate runs it.
       OAUTH2_PROXY_ALLOWED_GROUP: ${OIDC_ALLOWED_GROUP:-}

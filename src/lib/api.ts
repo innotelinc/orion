@@ -17,6 +17,7 @@ export interface StatePayload {
   files: FileNode[]
   storage: StorageState
   session: Session
+  signin: { available: boolean; group: string }
   users: UserAccount[]
   spaces: Space[]
   apps: AppEntry[]
@@ -71,7 +72,12 @@ export const api = {
   // `spaces` or `apps`, and the UI must not crash on that.
   state: async (): Promise<StatePayload> => {
     const payload = await request<StatePayload>('/api/state')
-    return { ...payload, spaces: payload.spaces ?? [], apps: payload.apps ?? [] }
+    return {
+      ...payload,
+      spaces: payload.spaces ?? [],
+      apps: payload.apps ?? [],
+      signin: payload.signin ?? { available: false, group: 'orion-users' },
+    }
   },
 
   mkdir: (parent: string, name: string) =>
@@ -119,6 +125,8 @@ export const api = {
       `/api/users/${encodeURIComponent(id)}/password`,
       { password },
     ),
+  setSpaceRole: (id: string, role: UserRole) =>
+    post<{ ok: true; space: Space }>(`/api/users/${encodeURIComponent(id)}/role`, { role }),
   deleteSpace: (id: string) =>
     request<{ ok: true; slug: string; name: string }>(`/api/users/${encodeURIComponent(id)}`, {
       method: 'DELETE',
