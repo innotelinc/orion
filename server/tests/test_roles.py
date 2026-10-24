@@ -438,6 +438,9 @@ class ShareClientTestCase(unittest.TestCase):
         spaces[0]["smb"] = True
         self.api.save_spaces(spaces)
         self.api.samba_installed = lambda: True
+        # Name resolution shells out to nmblookup and getent; a unit test has
+        # neither, and nothing here is about the lookup itself.
+        self.api.machine_name = lambda address: ""
         # create_space already asked for the share facts (with no Samba, so
         # nothing), and that answer is cached for a few seconds.
         self.api.CLIENT_CACHE.update({"key": None, "at": 0.0, "value": {}})
@@ -524,6 +527,39 @@ class ShareClientTestCase(unittest.TestCase):
         self.assertEqual(facts["clients"], [])
         self.assertIsNone(facts["lastClient"])
 
+    def test_a_client_is_called_by_its_name_and_keeps_its_address(self):
+        self.api.machine_name = lambda address: "DESKTOP-7Q4" if address == "192.168.1.20" else ""
+        self.api.smb_status = lambda: {
+            "tcons": {
+                "1": {"service": "Ada Lovelace", "machine": "192.168.1.20", "connected_at": "2026-10-24T09:15:00"}
+            }
+        }
+        facts = self.api.space_facts(self.api.load_spaces()[0], 0, self.admin)
+        self.assertEqual(facts["clients"][0]["machine"], "DESKTOP-7Q4")
+        self.assertEqual(facts["clients"][0]["address"], "192.168.1.20")
+        self.assertEqual(facts["lastClient"]["machine"], "DESKTOP-7Q4")
+
+    def test_a_client_without_a_name_keeps_its_address(self):
+        self.api.smb_status = lambda: {
+            "tcons": {
+                "1": {"service": "Ada Lovelace", "machine": "fe80::3309:3fb0", "connected_at": "2026-10-24T09:15:00"}
+            }
+        }
+        facts = self.api.space_facts(self.api.load_spaces()[0], 0, self.admin)
+        self.assertEqual(facts["clients"][0]["machine"], "fe80::3309:3fb0")
+
+    def test_the_notice_uses_the_name_and_quotes_the_address(self):
+        self.api.machine_name = lambda address: "DESKTOP-7Q4" if address == "192.168.1.20" else ""
+        self.api.smb_status = lambda: {
+            "tcons": {
+                "1": {"service": "Ada Lovelace", "machine": "192.168.1.20", "connected_at": "2026-10-24T09:15:00"}
+            }
+        }
+        self.api.share_client_map(self.api.load_spaces(), ttl=0)
+        notice = self.api.share_notices()[0]
+        self.assertEqual(notice["title"], "DESKTOP-7Q4 connected to Ada Lovelace")
+        self.assertIn("192.168.1.20", notice["body"])
+
     def test_a_new_machine_is_noticed_once_and_named(self):
         self.api.smb_status = lambda: {
             "tcons": {
@@ -592,6 +628,56 @@ class ShareClientTestCase(unittest.TestCase):
         saved = json.loads(stored.read_text())
         self.assertEqual(saved["shares"], {})
         self.assertEqual(saved["machines"], {})
+
+
+class MachineNameTestCase(unittest.TestCase):
+    """Turning an address into something a person recognises."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name) / "storage"
+        self.root.mkdir()
+        self.api = load_api(self.root)
+        self.api.MACHINE_NAMES.clear()
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_the_netbios_name_wins_and_this_server_is_ignored(self):
+        self.api.run_root = lambda *args, **kwargs: (
+            "Looking up status of 192.168.1.20\n"
+            "\tDESKTOP-7Q4     <00> -         B <ACTIVE>\n"
+            "\tWORKGROUP       <00> - <GROUP> B <ACTIVE>\n"
+            "\tORION-NAS       <00> -         B <ACTIVE>\n"
+        )
+        self.assertEqual(self.api.netbios_name("192.168.1.20"), "DESKTOP-7Q4")
+
+    def test_the_zero_address_fallback_is_not_a_name(self):
+        # nmblookup answers for 0.0.0.0 when it cannot parse the address, and
+        # that reply is this server talking about itself.
+        self.api.run_root = lambda *args, **kwargs: (
+            "Looking up status of 0.0.0.0\n\tORION-NAS       <00> -         B <ACTIVE>\n"
+        )
+        self.assertEqual(self.api.netbios_name("192.168.1.20"), "")
+
+    def test_ipv6_is_never_asked_of_netbios(self):
+        asked = []
+        self.api.run_root = lambda script, **kwargs: asked.append(script) or ""
+        self.api.machine_name("fe80::3309:3fb0:b346:87d6")
+        self.assertFalse([call for call in asked if "nmblookup" in call])
+
+    def test_the_resolver_is_the_fallback(self):
+        self.api.run_root = lambda script, **kwargs: (
+            "192.168.1.20\tdesktop-7q4.local\n" if "getent" in script else ""
+        )
+        self.assertEqual(self.api.machine_name("192.168.1.20"), "desktop-7q4.local")
+
+    def test_a_lookup_is_remembered(self):
+        calls = []
+        self.api.netbios_name = lambda address: calls.append(address) or "DESKTOP-7Q4"
+        self.api.machine_name("192.168.1.20")
+        self.api.machine_name("192.168.1.20")
+        self.assertEqual(calls, ["192.168.1.20"])
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -1722,10 +1723,18 @@ def share_client_map(spaces: list[dict], ttl: float = 5.0) -> dict[str, dict]:
         slug = by_share.get(session["service"].lower())
         if not slug:
             continue
+        address = session["machine"]
+        # What to call it: Samba only ever reports addresses, and an IPv6
+        # link-local address is not a name anyone recognises.
+        name = machine_name(address) if address else ""
         live.setdefault(slug, []).append(
-            {"machine": session["machine"], "since": session["since"]}
+            {
+                "machine": name or address,
+                "address": address,
+                "since": session["since"],
+            }
         )
-        machine = session["machine"]
+        machine = address
         if machine and machine not in first_seen.setdefault(slug, {}):
             # The moment this machine first appeared here, which is what makes a
             # connection a one-time event rather than a state to re-notify.
@@ -1735,7 +1744,11 @@ def share_client_map(spaces: list[dict], ttl: float = 5.0) -> dict[str, dict]:
         latest = max(clients, key=lambda client: client["since"] or "")
         if not latest["machine"]:
             continue
-        record = {"machine": latest["machine"], "since": latest["since"]}
+        record = {
+            "machine": latest["machine"],
+            "address": latest["address"],
+            "since": latest["since"],
+        }
         if remembered.get(slug) != record:
             remembered[slug] = record
             changed = True
@@ -1751,6 +1764,84 @@ def share_client_map(spaces: list[dict], ttl: float = 5.0) -> dict[str, dict]:
     }
     CLIENT_CACHE.update(key=key, at=now, value=value)
     return value
+
+
+MACHINE_NAMES: dict[str, tuple[float, str]] = {}
+MACHINE_NAME_TTL = 3600.0
+# A name that did not answer once is asked again later, but not on every poll.
+MACHINE_NAME_MISS_TTL = 600.0
+
+
+def netbios_name(address: str) -> str:
+    """The Windows name a client answers to on its own link, or ''."""
+    try:
+        output = run_root(f"nmblookup -A {shlex.quote(address)}", timeout=8)
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return ""
+    # nmblookup falls back to 0.0.0.0 for an address it cannot parse — including
+    # every IPv6 one — and then cheerfully reports this server's own names. The
+    # header is the only thing that says which machine was actually asked.
+    if f"Looking up status of {address}" not in output:
+        return ""
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) < 2 or fields[1] != "<00>" or "<GROUP>" in fields:
+            continue
+        name = fields[0].strip().rstrip("$")
+        if not name or name.upper() in (NETBIOS_NAME.upper(), WORKGROUP.upper(), "__MSBROWSE__"):
+            continue
+        return name
+    return ""
+
+
+def resolver_name(address: str) -> str:
+    """Whatever the host's resolver knows this address as, or ''.
+
+    `getent` is the system resolver, so this covers DNS, /etc/hosts and mDNS when
+    avahi's NSS module is installed — the paths a NetBIOS lookup cannot reach.
+    """
+    try:
+        output = run_root(f"getent hosts {shlex.quote(address)}", timeout=8)
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return ""
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) < 2:
+            continue
+        name = fields[1].rstrip(".")
+        if not name or name == address or name.split(".")[0] == "localhost":
+            continue
+        return name
+    return ""
+
+
+def machine_name(address: str) -> str:
+    """A name for a client's address, or '' when nothing here knows one.
+
+    NetBIOS first, because that is the name Windows puts on the wire; then the
+    system resolver. Both are shelled out with a timeout through the unsandboxed
+    path smbstatus needs, so a slow lookup can never hold up /api/state, and the
+    answer is cached: names rarely change, and asking again every twenty seconds
+    would turn a nicety into load.
+    """
+    address = str(address or "").strip()
+    if not address:
+        return ""
+    cached = MACHINE_NAMES.get(address)
+    now = time.monotonic()
+    if cached is not None and now < cached[0]:
+        return cached[1]
+    bare = address.split("%", 1)[0]
+    name = ""
+    # NetBIOS is IPv4-only; asking it about an IPv6 address gets a wrong answer
+    # before it gets no answer.
+    if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", bare):
+        name = netbios_name(bare)
+    if not name:
+        name = resolver_name(bare)
+    ttl = MACHINE_NAME_TTL if name else MACHINE_NAME_MISS_TTL
+    MACHINE_NAMES[address] = (now + ttl, name)
+    return name
 
 
 SHARE_NOTICE_WINDOW = 24 * 3600
@@ -1781,24 +1872,26 @@ def share_notices(limit: int = 3) -> list[dict]:
     now = time.time()
     found: list[tuple[float, dict]] = []
     for slug, machines in registry["machines"].items():
-        name = names.get(slug)
-        if name is None:
+        share_name = names.get(slug)
+        if share_name is None:
             # The share is gone; nothing left to notify about.
             continue
         for machine, first_seen in machines.items():
             age = now - first_seen
             if age < 0 or age > SHARE_NOTICE_WINDOW:
                 continue
+            name = machine_name(machine) or machine
             handle = re.sub(r"[^a-z0-9]+", "-", machine.lower()).strip("-") or "client"
             found.append(
                 (
                     age,
                     {
                         "id": f"n-share-{slug}-{handle}",
-                        "title": f"{machine} connected to {name}",
+                        "title": f"{name} connected to {share_name}",
                         "body": (
-                            f"First seen {human_ago(age)} on \\{NETBIOS_NAME}\\{slug}. "
-                            "New connections are remembered once."
+                            f"First seen {human_ago(age)} on \\{NETBIOS_NAME}\\{slug}"
+                            + (f" ({machine})" if name != machine else "")
+                            + ". New connections are remembered once."
                         ),
                         "tone": "success",
                         "time": human_ago(age),

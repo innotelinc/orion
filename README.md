@@ -123,6 +123,17 @@ reports a machine on the share right now, a grey dot with a time means it was
 used and when, and *Never* means no client has ever opened it. The page reads
 `/api/state` every 20 seconds, so a mount appears within that.
 
+A client is named by whatever this host can resolve. Samba only ever reports an
+address, so each address is looked up once — NetBIOS first (`nmblookup -A`, which
+answers with the name Windows puts on the wire) and then the system resolver
+(`getent hosts`, so DNS and mDNS count). The answer is cached for an hour and a
+failure for ten minutes, both behind a timeout, because a slow lookup must never
+hold up `/api/state`. Anything that answers nothing keeps its address, and the
+address is always kept beside the name so a notice or a row can be traced back
+to the machine that made it. IPv6 clients usually show their address: NetBIOS is
+IPv4-only, and the container has no mDNS NSS module, so `getent` has nothing to
+ask.
+
 A machine arriving for the first time on a share is also an event: the registry
 keeps the first sighting per machine per share, and a sighting inside the last
 day becomes a notification — *DESKTOP-7Q4 connected to Household* in the bell and

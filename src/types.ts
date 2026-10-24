@@ -80,7 +80,10 @@ export interface Session {
 
 /** One machine Samba has seen on a share, and when it connected. */
 export interface ShareClient {
+  /** The client's own name where one was resolved, else its address. */
   machine: string
+  /** What Samba reported, so a name can always be traced to an address. */
+  address?: string
   /** ISO timestamp; empty string when Samba did not say. */
   since: string
 }
