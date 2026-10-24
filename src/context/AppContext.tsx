@@ -93,6 +93,7 @@ interface AppContextValue {
   removeSpace: (id: string) => Promise<ActionResult>
   setSpacePassword: (id: string, password: string) => Promise<ActionResult>
   setSpaceRole: (id: string, role: UserRole) => Promise<ActionResult>
+  removeShare: (id: string) => Promise<ActionResult>
   installApp: (id: string) => Promise<ActionResult>
   removeApp: (id: string) => Promise<ActionResult>
   dismissNotification: (id: string) => void
@@ -473,6 +474,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [loadState, pushToast],
   )
 
+  const removeShare = useCallback(
+    async (id: string): Promise<ActionResult> => {
+      try {
+        const { space } = await api.removeShare(id)
+        await loadState()
+        pushToast({
+          title: `${space.name} is no longer shared`,
+          description: 'The Samba account went with the share. The folder and its files stay.',
+          tone: 'info',
+        })
+        return { ok: true }
+      } catch (failure) {
+        return {
+          ok: false,
+          error:
+            failure instanceof Error ? failure.message : 'The host refused to remove the share.',
+        }
+      }
+    },
+    [loadState, pushToast],
+  )
+
   const setSpacePassword = useCallback(
     async (id: string, password: string): Promise<ActionResult> => {
       try {
@@ -590,6 +613,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       removeSpace,
       setSpacePassword,
       setSpaceRole,
+      removeShare,
       installApp,
       removeApp,
       dismissNotification,
@@ -620,6 +644,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       removeSpace,
       setSpacePassword,
       setSpaceRole,
+      removeShare,
       installApp,
       removeApp,
       dismissNotification,

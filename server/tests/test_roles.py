@@ -168,6 +168,36 @@ class RoleTestCase(unittest.TestCase):
         stored = {space["slug"]: space for space in self.api.load_spaces()}
         self.assertTrue(stored[person["slug"]]["smb"])
 
+    def test_removing_a_share_keeps_the_folder_and_the_sign_in(self):
+        self.api.directory_ready = lambda: True
+        self.api.create_signin = lambda username, *args, **kwargs: username
+        space = self.api.create_space(
+            {
+                "name": "Shared Person",
+                "email": "shared@example.test",
+                "role": "Member",
+                "password": "a-long-password",
+            },
+            self.admin,
+        )
+        self.api.samba_installed = lambda: True
+        removed = self.api.remove_share(space["slug"], self.admin)
+        self.assertFalse(removed["smb"])
+        self.assertEqual(removed["signin"], space["slug"])
+        self.assertTrue((self.root / "Users" / space["slug"]).is_dir())
+        stored = self.api.load_spaces()[0]
+        self.assertFalse(stored["smb"])
+
+    def test_removing_a_share_obeys_the_same_scope_as_the_rest(self):
+        self.api.samba_installed = lambda: True
+        person = self.api.create_space(
+            {"name": "Someone", "email": "someone@example.test", "role": "Member"}, self.admin
+        )
+        self.api.set_space_password(person["slug"], "a-long-password", self.admin)
+        session = self.api.session_facts(identity(self.member_email))
+        with self.assertRaises(PermissionError):
+            self.api.remove_share(person["slug"], session)
+
     # -- appointing and demoting ------------------------------------------
 
     def test_only_a_platform_admin_may_change_a_role(self):

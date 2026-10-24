@@ -59,6 +59,7 @@ The dev server proxies `/api` to `http://127.0.0.1:8099` by default; set
 | `POST /api/services` | start/stop/restart a unit |
 | `POST /api/apps` | install or remove a catalogue app with apt |
 | `POST /api/users/{slug}/password` | create or reset that space's Samba account and sign-in |
+| `DELETE /api/users/{slug}/share` | remove the Samba account and share, keeping folder and sign-in |
 | `POST /api/users/{slug}/role` | appoint an agency admin, or put one back to member (platform admin only) |
 | `POST /api/users` | create a person's folder and record it in `.orion/spaces.json` |
 | `DELETE /api/users/{slug}` | move that folder to `.orion/trash` and forget it |
@@ -98,6 +99,19 @@ from the registry. The original file is kept once as
 `/etc/samba/smb.conf.orion-backup`. Each share is fixed to its owner and the media
 library is exported read-only to the group. Removing a space removes its account
 and share; removing the SMB app takes every account with it, and files stay.
+
+**What Windows asks for is the share account, not the desktop login.** The
+username is the space's slug — `household` for `\\ORION-NAS\household` — and the
+password is the one set for that space in Settings → Users. An Authentik login
+(`dhunter`, `dhunter@innotel.us`) has no Samba account unless that person also
+has a space; a platform admin who wants one adds themselves like anyone else.
+Where a space has a sign-in, the two passwords are byte-for-byte the same, but
+the usernames are not: Authentik knows `dhunter`, Samba knows `household`.
+
+Settings → Users → **SMB** also removes a share (`DELETE
+/api/users/{slug}/share`). It deletes the Samba account and the exported share
+and marks the space unshared; the folder, its files and any sign-in stay, and
+setting a password again brings the share back.
 
 ### The name on the LAN
 

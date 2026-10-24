@@ -945,6 +945,34 @@ def set_space_password(slug: str, password: str, session: dict | None = None) ->
     return space_facts(space, spaces.index(space), session)
 
 
+def remove_share(slug: str, session: dict | None = None) -> dict:
+    """Take a space off the network without touching its files.
+
+    The person keeps their folder, their sign-in and their files; what goes is
+    the Samba account and the exported share, and the registry stops claiming
+    the space is shared. Re-enabling is the same as setting a password again.
+    """
+    session = session or session_facts(None)
+    spaces = load_spaces()
+    space = next((item for item in spaces if str(item["slug"]) == slug), None)
+    if space is None:
+        raise LookupError("that person has no space on this host")
+    if not can_manage_space(space, session):
+        raise PermissionError("you can only change shares in your own agency")
+    if not space.get("smb"):
+        # Nothing to remove is not an error: the share is already gone, and the
+        # registry is corrected either way.
+        space["smb"] = False
+        save_spaces(spaces)
+        return space_facts(space, spaces.index(space), session)
+    drop_samba_account(str(space["slug"]))
+    space["smb"] = False
+    save_spaces(spaces)
+    if samba_installed():
+        apply_smb_conf()
+    return space_facts(space, spaces.index(space), session)
+
+
 def set_space_role(
     slug: str, role: object, session: dict | None = None, agency: object = ""
 ) -> dict:
@@ -2347,6 +2375,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         route = urllib.parse.urlsplit(self.path).path.rstrip("/") or "/"
         try:
+            if route.startswith("/api/users/") and route.endswith("/share"):
+                slug = urllib.parse.unquote(route[len("/api/users/") :].removesuffix("/share"))
+                session = session_facts(self.identity())
+                space = remove_share(slug, session)
+                self.json({"ok": True, "space": space})
+                return
             if route.startswith("/api/users/"):
                 slug = urllib.parse.unquote(route[len("/api/users/") :])
                 session = session_facts(self.identity())
@@ -2360,6 +2394,8 @@ class Handler(BaseHTTPRequestHandler):
             self.fail(str(error), HTTPStatus.NOT_FOUND)
         except ValueError as error:
             self.fail(str(error))
+        except RuntimeError as error:
+            self.fail(str(error), HTTPStatus.BAD_GATEWAY)
         except OSError as error:
             self.fail(f"{error.strerror or error}", HTTPStatus.INTERNAL_SERVER_ERROR)
 

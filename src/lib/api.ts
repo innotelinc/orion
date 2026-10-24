@@ -127,6 +127,10 @@ export const api = {
     ),
   setSpaceRole: (id: string, role: UserRole) =>
     post<{ ok: true; space: Space }>(`/api/users/${encodeURIComponent(id)}/role`, { role }),
+  removeShare: (id: string) =>
+    request<{ ok: true; space: Space }>(`/api/users/${encodeURIComponent(id)}/share`, {
+      method: 'DELETE',
+    }),
   deleteSpace: (id: string) =>
     request<{ ok: true; slug: string; name: string }>(`/api/users/${encodeURIComponent(id)}`, {
       method: 'DELETE',

@@ -16,6 +16,7 @@ import {
   SlidersHorizontal,
   Sun,
   Trash2,
+  Unplug,
   UserCog,
   UserPlus,
   Users,
@@ -124,6 +125,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
     apps,
     addSpace,
     removeSpace,
+    removeShare,
     setSpacePassword,
     setSpaceRole,
     pushToast,
@@ -188,6 +190,19 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
       return
     }
     setRoleTarget(null)
+  }
+
+  const submitRemoveShare = async () => {
+    if (!passwordTarget) return
+    setSpaceBusy(true)
+    const result = await removeShare(passwordTarget.id)
+    setSpaceBusy(false)
+    if (!result.ok) {
+      setPasswordError(result.error ?? 'The host refused to remove that share.')
+      return
+    }
+    setPasswordTarget(null)
+    setPasswordValue('')
   }
 
   const submitSpace = async () => {
@@ -652,7 +667,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                           <span>{space.email || 'no address recorded'}</span>
                           <span>
                             {space.path} · {formatBytes(space.usedBytes)} stored
-                            {space.smb ? ' · SMB share' : ''}
+                            {space.smb ? ` · \\ORION-NAS\\${space.slug} as ${space.slug}` : ''}
                             {space.signin ? ` · signs in as ${space.signin}` : ''}
                             {space.agency
                               ? ` · under ${spaces.find((item) => item.slug === space.agency)?.name ?? space.agency}`
@@ -1158,13 +1173,25 @@ systemctl reload nginx`}
         description={
           passwordTarget
             ? passwordTarget.signin
-              ? `${passwordTarget.name} uses this for their share and their sign-in (${passwordTarget.signin}).`
-              : `${passwordTarget.name} will sign in to their own share as “${passwordTarget.slug}”.`
+              ? `${passwordTarget.name} signs in to the desktop and to \\ORION-NAS\\${passwordTarget.slug} as “${passwordTarget.slug}”, with this one password.`
+              : `Windows asks for “${passwordTarget.slug}”, not an Authentik login, when it opens \\ORION-NAS\\${passwordTarget.slug}.`
             : undefined
         }
         size="sm"
         footer={
           <>
+            {passwordTarget?.smb ? (
+              <button
+                type="button"
+                className="button button--danger button--ghost"
+                disabled={spaceBusy}
+                title="Remove the Samba account and the share, keeping every file"
+                onClick={() => void submitRemoveShare()}
+              >
+                <Unplug size={14} aria-hidden="true" />
+                Remove share
+              </button>
+            ) : null}
             <button type="button" className="button" onClick={() => setPasswordTarget(null)}>
               Cancel
             </button>
