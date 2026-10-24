@@ -4,6 +4,7 @@ import type {
   Metrics,
   NotificationItem,
   RootEntry,
+  Session,
   Space,
   StorageState,
   SystemInfo,
@@ -15,6 +16,7 @@ import type {
 export interface StatePayload {
   files: FileNode[]
   storage: StorageState
+  session: Session
   users: UserAccount[]
   spaces: Space[]
   apps: AppEntry[]
@@ -105,8 +107,13 @@ export const api = {
   service: (unit: string, action: 'start' | 'stop' | 'restart') =>
     post<{ ok: true; unit: string; action: string }>('/api/services', { unit, action }),
 
-  createSpace: (input: { name: string; email: string; role: UserRole; password?: string }) =>
-    post<{ ok: true; space: Space }>('/api/users', input),
+  createSpace: (input: {
+    name: string
+    email: string
+    role: UserRole
+    password?: string
+    agency?: string
+  }) => post<{ ok: true; space: Space }>('/api/users', input),
   setSpacePassword: (id: string, password: string) =>
     post<{ ok: true; space: Space }>(
       `/api/users/${encodeURIComponent(id)}/password`,

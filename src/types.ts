@@ -45,7 +45,7 @@ export interface FileNode {
   tone: FileTone
 }
 
-export type UserRole = 'Owner' | 'Admin' | 'Member' | 'Guest'
+export type UserRole = 'Platform admin' | 'Agency admin' | 'Member' | 'Guest'
 
 export interface UserAccount {
   id: string
@@ -57,6 +57,25 @@ export interface UserAccount {
   isCurrent?: boolean
   account?: string
   home?: string
+  /** Slug of the agency this account is filed under, if any. */
+  agency?: string
+  /** The API's answer to "may the person signed in now change this account?" */
+  manageable?: boolean
+}
+
+/**
+ * What the signed-in person may administer. `all` is a platform admin,
+ * `agency` is an agency admin limited to their own people, `none` is a member.
+ */
+export interface Session {
+  role: 'Platform admin' | 'Agency admin' | 'Member' | 'Anonymous'
+  email: string
+  agency: string
+  permissions: {
+    manageUsers: boolean
+    scope: 'all' | 'agency' | 'none'
+    agency: string
+  }
 }
 
 /**
@@ -76,6 +95,10 @@ export interface Space {
   color: string
   /** True when the space also has a Samba account and an exported share. */
   smb: boolean
+  /** Slug of the agency admin this person is filed under, if any. */
+  agency?: string
+  /** Whether the session may remove or re-key this person. */
+  manageable?: boolean
 }
 
 /** Something the host can install. `installed` and `state` come from dpkg and systemd. */

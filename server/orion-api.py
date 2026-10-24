@@ -41,7 +41,19 @@ TRASH = META / "trash"
 STARS = META / "starred.json"
 SPACES = META / "spaces.json"
 USERS_DIR_NAME = "Users"
-SPACE_ROLES = ("Owner", "Admin", "Member", "Guest")
+# Administration is two levels. A platform admin owns the box and every
+# account on it; an agency admin owns the people under their own space. The
+# role is data matched against the signed-in address, not a property of the
+# proxy session, so it survives a new login and a new browser.
+PLATFORM_ROLE = "Platform admin"
+AGENCY_ROLE = "Agency admin"
+SPACE_ROLES = (AGENCY_ROLE, "Member", "Guest")
+# Roles from before this model existed: an Owner or Admin ran their people, so
+# that is what they keep meaning.
+LEGACY_ROLES = {"owner": AGENCY_ROLE, "admin": AGENCY_ROLE}
+PLATFORM_ADMINS = META / "platform-admins.json"
+# A provider group that grants the same thing without editing a file here.
+PLATFORM_GROUP = "orion-platform-admins"
 SPACE_PALETTE = ["#0a63ff", "#8b5cf6", "#10b981", "#f59e0b", "#f43f5e", "#06b6d4"]
 SMB_CONF = Path("/etc/samba/smb.conf")
 SMB_CONF_BACKUP = Path("/etc/samba/smb.conf.orion-backup")
@@ -538,12 +550,16 @@ def storage_facts() -> dict:
     }
 
 
-def users_facts(identity: dict | None) -> list[dict]:
+def users_facts(identity: dict | None, session: dict | None = None) -> list[dict]:
     """The people this app knows: the signed-in person, and the spaces an admin
     issued. The container's own Unix accounts are not app users — root and
     ubuntu are plumbing, and listing them made the desktop look like it had
     signed in as root.
+
+    Each row carries `manageable`, so the UI never has to re-derive who may
+    touch whom from a role string.
     """
+    session = session or session_facts(identity)
     users = []
     if identity and identity.get("email"):
         users.append(
@@ -551,13 +567,14 @@ def users_facts(identity: dict | None) -> list[dict]:
                 "id": "sso",
                 "name": identity.get("name") or identity["email"].split("@")[0],
                 "email": identity["email"],
-                "role": "Admin",
+                "role": session.get("role") or "Member",
                 "lastActive": "This session",
                 "color": "#0a63ff",
                 "isCurrent": True,
                 "account": identity.get("username") or "",
                 "home": "",
                 "source": "authentik",
+                "manageable": False,
             }
         )
     for index, space in enumerate(load_spaces()):
@@ -566,13 +583,15 @@ def users_facts(identity: dict | None) -> list[dict]:
                 "id": f"space-{space['slug']}",
                 "name": str(space.get("name") or space["slug"]),
                 "email": str(space.get("email") or f"{space['slug']}@nas"),
-                "role": str(space.get("role") or "Member"),
+                "role": normalise_role(space.get("role")),
+                "agency": str(space.get("agency") or ""),
                 "lastActive": "Space · admin issued",
                 "color": str(space.get("color") or SPACE_PALETTE[index % len(SPACE_PALETTE)]),
                 "isCurrent": False,
                 "account": str(space["slug"]),
                 "home": f"/{USERS_DIR_NAME}/{space['slug']}",
                 "source": "space",
+                "manageable": can_manage_space(space, session),
             }
         )
     return users
@@ -615,6 +634,109 @@ def save_spaces(spaces: list[dict]) -> None:
     temporary.replace(SPACES)
 
 
+def normalise_role(value: object) -> str:
+    """One of the three roles this app knows, whatever the old value was."""
+    text = str(value or "").strip().lower()
+    if text in LEGACY_ROLES:
+        return LEGACY_ROLES[text]
+    for role in SPACE_ROLES:
+        if role.lower() == text:
+            return role
+    return "Member"
+
+
+def load_platform_admins() -> list[str]:
+    try:
+        payload = json.loads(PLATFORM_ADMINS.read_text())
+    except (OSError, ValueError):
+        return []
+    emails = payload.get("emails") if isinstance(payload, dict) else None
+    return [str(item).strip().lower() for item in emails or [] if str(item).strip()]
+
+
+def save_platform_admins(emails: list[str]) -> None:
+    META.mkdir(parents=True, exist_ok=True)
+    temporary = PLATFORM_ADMINS.with_name(PLATFORM_ADMINS.name + ".tmp")
+    temporary.write_text(json.dumps({"emails": emails}, indent=2) + "\n")
+    temporary.replace(PLATFORM_ADMINS)
+
+
+def space_by_email(email: str) -> dict | None:
+    wanted = email.strip().lower()
+    return next(
+        (
+            space
+            for space in load_spaces()
+            if str(space.get("email") or "").strip().lower() == wanted
+        ),
+        None,
+    )
+
+
+def session_facts(identity: dict | None) -> dict:
+    """Who is asking, and which accounts they may administer.
+
+    The first address to reach a box with no platform admins recorded becomes
+    one, so a fresh install cannot lock itself out; after that the registry in
+    `.orion/platform-admins.json` — or membership of the provider's
+    `orion-platform-admins` group — decides.
+    """
+    anonymous = {
+        "role": "Anonymous",
+        "email": "",
+        "agency": "",
+        "permissions": {"manageUsers": False, "scope": "none", "agency": ""},
+    }
+    if not identity or not identity.get("email"):
+        return anonymous
+    email = str(identity["email"]).strip().lower()
+    admins = load_platform_admins()
+    groups = {str(group).strip().lower() for group in identity.get("groups") or []}
+    platform = email in admins or PLATFORM_GROUP in groups
+    if not platform and not admins:
+        try:
+            save_platform_admins([email])
+            platform = True
+        except OSError:
+            platform = False
+    if platform:
+        return {
+            "role": PLATFORM_ROLE,
+            "email": email,
+            "agency": "",
+            "permissions": {"manageUsers": True, "scope": "all", "agency": ""},
+        }
+    space = space_by_email(email)
+    if space is not None and normalise_role(space.get("role")) == AGENCY_ROLE:
+        slug = str(space["slug"])
+        return {
+            "role": AGENCY_ROLE,
+            "email": email,
+            "agency": slug,
+            "permissions": {"manageUsers": True, "scope": "agency", "agency": slug},
+        }
+    return {
+        "role": "Member",
+        "email": email,
+        "agency": str(space["slug"]) if space else "",
+        "permissions": {"manageUsers": False, "scope": "none", "agency": ""},
+    }
+
+
+def can_manage_space(space: dict, session: dict) -> bool:
+    """May this session add, remove or re-key that account?"""
+    permissions = session.get("permissions") or {}
+    if not permissions.get("manageUsers"):
+        return False
+    if permissions.get("scope") == "all":
+        return True
+    agency = str(permissions.get("agency") or "")
+    slug = str(space.get("slug") or "")
+    # An agency admin runs the people filed under them; their own space is the
+    # agency, and removing it would remove the identity the role is matched on.
+    return bool(agency) and str(space.get("agency") or "") == agency and slug != agency
+
+
 def folder_bytes(directory: Path, budget: int = 20_000) -> int:
     """Bytes under one folder, capped so a huge tree cannot stall a request."""
     total = 0
@@ -641,14 +763,16 @@ def folder_bytes(directory: Path, budget: int = 20_000) -> int:
     return total
 
 
-def space_facts(space: dict, index: int) -> dict:
+def space_facts(space: dict, index: int, session: dict | None = None) -> dict:
     slug = str(space["slug"])
     return {
         "id": slug,
         "slug": slug,
         "name": str(space.get("name") or slug),
         "email": str(space.get("email") or ""),
-        "role": space.get("role") if space.get("role") in SPACE_ROLES else "Member",
+        "role": normalise_role(space.get("role")),
+        "agency": str(space.get("agency") or ""),
+        "manageable": can_manage_space(space, session) if session else False,
         "path": f"/{USERS_DIR_NAME}/{slug}",
         "usedBytes": folder_bytes(users_root() / slug),
         "createdAt": str(space.get("createdAt") or ""),
@@ -657,7 +781,7 @@ def space_facts(space: dict, index: int) -> dict:
     }
 
 
-def spaces_facts() -> list[dict]:
+def spaces_facts(session: dict | None = None) -> list[dict]:
     """Registered spaces whose folder still exists; a folder deleted in Files drops out."""
     spaces = load_spaces()
     present = [space for space in spaces if (users_root() / str(space["slug"])).is_dir()]
@@ -666,25 +790,41 @@ def spaces_facts() -> list[dict]:
             save_spaces(present)
         except OSError:
             pass
-    return [space_facts(space, index) for index, space in enumerate(present)]
+    return [space_facts(space, index, session) for index, space in enumerate(present)]
 
 
-def create_space(payload: dict) -> dict:
+def create_space(payload: dict, session: dict | None = None) -> dict:
+    """Add a person. Who may do so, and for whom, is decided here rather than
+    in the browser: a platform admin anywhere, an agency admin only under their
+    own agency and never as another agency admin.
+    """
+    session = session or session_facts(None)
+    permissions = session.get("permissions") or {}
+    if not permissions.get("manageUsers"):
+        raise PermissionError("only an administrator can add accounts")
     name = str(payload.get("name", "")).strip()
     email = str(payload.get("email", "")).strip().lower()
-    role = str(payload.get("role", "Member"))
+    role = normalise_role(payload.get("role"))
     if len(name) < 2:
         raise ValueError("give the person a name")
     if len(name) > 80:
         raise ValueError("keep names under 80 characters")
-    if role not in SPACE_ROLES:
-        raise ValueError("unknown role")
     if email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         raise ValueError("that email address does not look right")
 
     spaces = load_spaces()
     if email and any(str(space.get("email", "")).lower() == email for space in spaces):
         raise ValueError("a space with that email already exists")
+
+    agency = str(payload.get("agency") or "").strip()
+    if permissions.get("scope") == "agency":
+        agency = str(permissions.get("agency") or "")
+        if role == AGENCY_ROLE:
+            raise PermissionError("only a platform admin can appoint another agency admin")
+    if agency:
+        sponsor = next((item for item in spaces if str(item["slug"]) == agency), None)
+        if sponsor is None or normalise_role(sponsor.get("role")) != AGENCY_ROLE:
+            raise ValueError("that agency does not exist")
 
     root = users_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -705,11 +845,16 @@ def create_space(payload: dict) -> dict:
         shutil.rmtree(root / slug, ignore_errors=True)
         raise
 
+    if role == AGENCY_ROLE:
+        # An agency admin's own space *is* the agency, so people they add are
+        # filed under it and they cannot remove it from under themselves.
+        agency = slug
     space = {
         "slug": slug,
         "name": name,
         "email": email,
         "role": role,
+        "agency": agency,
         "color": SPACE_PALETTE[len(spaces) % len(SPACE_PALETTE)],
         "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "smb": smb,
@@ -717,10 +862,11 @@ def create_space(payload: dict) -> dict:
     save_spaces([*spaces, space])
     if smb:
         apply_smb_conf()
-    return space_facts(space, len(spaces))
+    return space_facts(space, len(spaces), session)
 
 
-def delete_space(slug: str) -> dict:
+def delete_space(slug: str, session: dict | None = None) -> dict:
+    session = session or session_facts(None)
     slug = str(slug or "").strip()
     if not slug or "/" in slug or slug in (".", ".."):
         raise ValueError("unknown space")
@@ -728,6 +874,8 @@ def delete_space(slug: str) -> dict:
     space = next((item for item in spaces if str(item["slug"]) == slug), None)
     if space is None:
         raise LookupError("that person has no space on this host")
+    if not can_manage_space(space, session):
+        raise PermissionError("you can only remove people in your own agency")
 
     if space.get("smb"):
         drop_samba_account(slug)
@@ -736,25 +884,34 @@ def delete_space(slug: str) -> dict:
         # Same rule as the Files app: deleting moves to Trash, never unlinks.
         TRASH.mkdir(parents=True, exist_ok=True)
         shutil.move(str(target), str(unique_child(TRASH, slug)))
-    save_spaces([item for item in spaces if str(item["slug"]) != slug])
+    remaining = [item for item in spaces if str(item["slug"]) != slug]
+    for item in remaining:
+        # The agency is gone: its people keep their folders but are no longer
+        # filed under an administrator who cannot exist any more.
+        if str(item.get("agency") or "") == slug:
+            item["agency"] = ""
+    save_spaces(remaining)
     if samba_installed():
         apply_smb_conf()
-    return space_facts(space, 0)
+    return space_facts(space, 0, session)
 
 
-def set_space_password(slug: str, password: str) -> dict:
+def set_space_password(slug: str, password: str, session: dict | None = None) -> dict:
     """Give an existing space an SMB account, or reset the one it has."""
+    session = session or session_facts(None)
     spaces = load_spaces()
     space = next((item for item in spaces if str(item["slug"]) == slug), None)
     if space is None:
         raise LookupError("that person has no space on this host")
+    if not can_manage_space(space, session):
+        raise PermissionError("you can only re-key people in your own agency")
     write_smb_password(
         slug, str(space.get("name") or slug), password, adopt=bool(space.get("smb"))
     )
     space["smb"] = True
     save_spaces(spaces)
     apply_smb_conf()
-    return space_facts(space, spaces.index(space))
+    return space_facts(space, spaces.index(space), session)
 
 
 # -------------------------------------------------------------- app catalogue
@@ -1791,12 +1948,15 @@ class Handler(BaseHTTPRequestHandler):
                 storage = storage_facts()
                 services = services_facts()
                 nodes = scan_files()
+                identity = self.identity()
+                session = session_facts(identity)
                 self.json(
                     {
                         "files": nodes,
                         "storage": storage,
-                        "users": users_facts(self.identity()),
-                        "spaces": spaces_facts(),
+                        "session": session,
+                        "users": users_facts(identity, session),
+                        "spaces": spaces_facts(session),
                         "apps": apps_facts(),
                         "services": services,
                         "notifications": notifications_facts(storage, services),
@@ -1919,13 +2079,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.upload()
                 return
             if route == "/api/users":
-                space = create_space(self.body())
+                session = session_facts(self.identity())
+                space = create_space(self.body(), session)
                 self.json({"ok": True, "space": space}, HTTPStatus.CREATED)
                 return
             if route.startswith("/api/users/") and route.endswith("/password"):
                 slug = urllib.parse.unquote(route[len("/api/users/") :].removesuffix("/password"))
                 payload = self.body()
-                space = set_space_password(slug, str(payload.get("password") or ""))
+                session = session_facts(self.identity())
+                space = set_space_password(slug, str(payload.get("password") or ""), session)
                 self.json({"ok": True, "space": space})
                 return
             if route == "/api/apps":
@@ -1939,6 +2101,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.json({"ok": True, "app": app})
                 return
             self.fail("not found", HTTPStatus.NOT_FOUND)
+        except PermissionError as error:
+            self.fail(str(error), HTTPStatus.FORBIDDEN)
         except LookupError as error:
             self.fail(str(error), HTTPStatus.NOT_FOUND)
         except ValueError as error:
@@ -1955,10 +2119,13 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if route.startswith("/api/users/"):
                 slug = urllib.parse.unquote(route[len("/api/users/") :])
-                space = delete_space(slug)
+                session = session_facts(self.identity())
+                space = delete_space(slug, session)
                 self.json({"ok": True, "slug": space["slug"], "name": space["name"]})
                 return
             self.fail("not found", HTTPStatus.NOT_FOUND)
+        except PermissionError as error:
+            self.fail(str(error), HTTPStatus.FORBIDDEN)
         except LookupError as error:
             self.fail(str(error), HTTPStatus.NOT_FOUND)
         except ValueError as error:

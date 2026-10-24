@@ -5,6 +5,7 @@ import {
   HardDrive,
   Info,
   KeyRound,
+  Lock,
   LogOut,
   Monitor,
   Moon,
@@ -90,8 +91,18 @@ function SectionCard({
   )
 }
 
-function uptimeLabel(seconds: number) {
-  const days = Math.floor(seconds / 86_400)
+const ROLE_TONE: Record<string, string> = {
+  'Platform admin': 'platform',
+  'Agency admin': 'agency',
+  Member: 'member',
+  Guest: 'guest',
+}
+
+function roleTone(role: UserRole) {
+  return ROLE_TONE[role] ?? 'member'
+}
+
+function uptimeLabel(seconds: number) {  const days = Math.floor(seconds / 86_400)
   const hours = Math.floor((seconds % 86_400) / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
   if (days > 0) return `${days} day${days === 1 ? '' : 's'}, ${hours} hours`
@@ -103,6 +114,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
   const {
     settings,
     updateSettings,
+    session,
     system,
     services,
     users,
@@ -122,6 +134,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
     name: '',
     email: '',
     role: 'Member' as UserRole,
+    agency: '',
     password: '',
   })
   const [spaceError, setSpaceError] = useState<string | null>(null)
@@ -132,6 +145,15 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
   const [passwordValue, setPasswordValue] = useState('')
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const smbApp = apps.find((app) => app.id === 'smb')
+  // Who may administer whom is decided by the API; the UI only mirrors it so a
+  // member is not offered buttons the host would refuse.
+  const canManageUsers = session.permissions.manageUsers
+  const platformWide = session.permissions.scope === 'all'
+  const myAgency = spaces.find((space) => space.slug === session.permissions.agency)
+  const agencies = spaces.filter((space) => space.role === 'Agency admin')
+  const roleChoices: UserRole[] = platformWide
+    ? ['Agency admin', 'Member', 'Guest']
+    : ['Member', 'Guest']
 
   const submitPassword = async () => {
     if (!passwordTarget) return
@@ -161,6 +183,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
       name,
       email: spaceForm.email.trim(),
       role: spaceForm.role,
+      agency: spaceForm.role === 'Agency admin' ? '' : spaceForm.agency || undefined,
       password: spaceForm.password || undefined,
     })
     setSpaceBusy(false)
@@ -169,7 +192,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
       return
     }
     setSpaceOpen(false)
-    setSpaceForm({ name: '', email: '', role: 'Member', password: '' })
+    setSpaceForm({ name: '', email: '', role: 'Member', agency: '', password: '' })
   }
 
   const confirmRemoveSpace = async () => {
@@ -560,8 +583,23 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                     <button
                       type="button"
                       className="button button--primary"
+                      disabled={!canManageUsers}
+                      title={
+                        canManageUsers
+                          ? platformWide
+                            ? 'Add anyone to this box'
+                            : `Add someone to ${myAgency?.name ?? 'your agency'}`
+                          : 'Only a platform admin or an agency admin can add people'
+                      }
                       onClick={() => {
                         setSpaceError(null)
+                        // A previous form may have been left on a role this
+                        // session cannot appoint.
+                        setSpaceForm((previous) => ({
+                          ...previous,
+                          role: roleChoices.includes(previous.role) ? previous.role : 'Member',
+                          agency: platformWide ? previous.agency : '',
+                        }))
                         setSpaceOpen(true)
                       }}
                     >
@@ -571,6 +609,21 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                   </>
                 }
               >
+                <div className="user-scope">
+                  <span className="user-scope__role">
+                    <ShieldCheck size={14} aria-hidden="true" />
+                    {session.role}
+                  </span>
+                  <span>
+                    {canManageUsers
+                      ? platformWide
+                        ? 'You administer every account on this box.'
+                        : `You administer the people filed under ${
+                            myAgency?.name ?? session.agency
+                          }, and nobody else.`
+                      : 'You can see every space. Adding, removing and re-keying people is reserved for administrators.'}
+                  </span>
+                </div>
                 {spaces.length ? (
                   <ul className="user-list">
                     {spaces.map((space) => (
@@ -582,15 +635,18 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                           <span>
                             {space.path} · {formatBytes(space.usedBytes)} stored
                             {space.smb ? ' · SMB share' : ''}
+                            {space.agency
+                              ? ` · under ${spaces.find((item) => item.slug === space.agency)?.name ?? space.agency}`
+                              : ''}
                           </span>
                         </div>
-                        <span className={`role-badge role-badge--${space.role.toLowerCase()}`}>
+                        <span className={`role-badge role-badge--${roleTone(space.role)}`}>
                           {space.role}
                         </span>
                         <span className="user-row__active">
                           {space.createdAt ? `added ${space.createdAt.slice(0, 10)}` : 'available'}
                         </span>
-                        {smbApp?.installed ? (
+                        {smbApp?.installed && space.manageable !== false ? (
                           <button
                             type="button"
                             className="button button--sm button--ghost"
@@ -609,15 +665,24 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                             {space.smb ? 'SMB' : 'Enable SMB'}
                           </button>
                         ) : null}
-                        <button
-                          type="button"
-                          className="icon-button icon-button--sm user-row__remove"
-                          aria-label={`Remove ${space.name}`}
-                          title={`Remove ${space.name}`}
-                          onClick={() => setRemoveSpaceTarget(space)}
-                        >
-                          <Trash2 size={14} aria-hidden="true" />
-                        </button>
+                        {space.manageable !== false ? (
+                          <button
+                            type="button"
+                            className="icon-button icon-button--sm user-row__remove"
+                            aria-label={`Remove ${space.name}`}
+                            title={`Remove ${space.name}`}
+                            onClick={() => setRemoveSpaceTarget(space)}
+                          >
+                            <Trash2 size={14} aria-hidden="true" />
+                          </button>
+                        ) : (
+                          <span
+                            className="user-row__locked"
+                            title="Only a platform admin, or the agency admin this person is filed under, can change this account"
+                          >
+                            <Lock size={13} aria-hidden="true" />
+                          </span>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -631,8 +696,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
 
               <SectionCard
                 title="Accounts"
-                description="Everyone this app knows: the sign-in the edge forwarded for this session, and the spaces an admin issued. The container's own Unix accounts are plumbing and are not listed here."
-                footer={
+                description="Everyone this app knows: the sign-in the edge forwarded for this session, and the spaces an admin issued. The container's own Unix accounts are plumbing and are not listed here."                footer={
                   <>
                     <span className="settings-dirty">{users.length} accounts</span>
                     <button type="button" className="button" onClick={() => void refresh()}>
@@ -654,7 +718,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                         <span>{user.email}</span>
                         {user.home ? <span>{user.home}</span> : null}
                       </div>
-                      <span className={`role-badge role-badge--${user.role.toLowerCase()}`}>
+                      <span className={`role-badge role-badge--${roleTone(user.role)}`}>
                         {user.role}
                       </span>
                       <span className="user-row__active">{user.lastActive}</span>
@@ -693,9 +757,13 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                   People sign in at the edge. The proxy forwards the address in{' '}
                   <code>X-Auth-Request-Email</code>, which is the row marked “This session”, and
                   every signed-in visitor sees the same desktop — so a space is a shared folder,
-                  not a private one. Adding someone means creating an Authentik account there.
-                  Signing out ends the proxy cookie and the Authentik session behind it, so the
-                  next visit asks for a password again.
+                  not a private one. Administration is two levels: a{' '}
+                  <strong>platform admin</strong> owns every account on the box (granted by the
+                  provider's <code>orion-platform-admins</code> group, or recorded in{' '}
+                  <code>.orion/platform-admins.json</code>), and an <strong>agency admin</strong>{' '}
+                  owns only the people filed under their own space. Signing out ends the proxy
+                  cookie and the Authentik session behind it, so the next visit asks for a
+                  password again.
                 </p>
               </SectionCard>
             </div>
@@ -944,14 +1012,43 @@ systemctl reload nginx`}
               setSpaceForm((previous) => ({ ...previous, role: event.target.value as UserRole }))
             }
           >
-            {(['Owner', 'Admin', 'Member', 'Guest'] as UserRole[]).map((role) => (
+            {(['Agency admin', 'Member', 'Guest'] as UserRole[])
+              .filter((role) => roleChoices.includes(role))
+              .map((role) => (
               <option key={role} value={role}>
                 {role}
               </option>
             ))}
           </select>
-          <span className="field__hint">A label for the people sharing this box, not a privilege.</span>
+          <span className="field__hint">
+            {platformWide
+              ? 'An agency admin runs the people filed under them; a member only has a folder. Platform admin is granted by the provider group, not from here.'
+              : 'A member only has a folder. Only a platform admin can appoint an agency admin.'}
+          </span>
         </div>
+        {platformWide && spaceForm.role !== 'Agency admin' ? (
+          <div className="field">
+            <label htmlFor="space-agency">Agency (optional)</label>
+            <select
+              id="space-agency"
+              className="input"
+              value={spaceForm.agency}
+              onChange={(event) =>
+                setSpaceForm((previous) => ({ ...previous, agency: event.target.value }))
+              }
+            >
+              <option value="">Unfiled</option>
+              {agencies.map((agency) => (
+                <option key={agency.id} value={agency.slug}>
+                  {agency.name}
+                </option>
+              ))}
+            </select>
+            <span className="field__hint">
+              Files this person under an agency admin, who can then add, remove and re-key them.
+            </span>
+          </div>
+        ) : null}
         {spaceError ? (
           <span className="field__error" role="alert">
             {spaceError}

@@ -17,7 +17,8 @@ DevTools Protocol at `127.0.0.1:9222`; the data is this machine's.
   filesystem call on `/srv/storage`.
 - **Spaces** — every person gets a folder under `/srv/storage/Users`, created or
   removed in Settings → Users and browsable like any other folder. A space is a
-  folder, not a session: there is no sign-in or logout attached to it.
+  folder, not a session: there is no sign-in or logout attached to it. Who may
+  add, remove or re-key a person is a role, enforced by the API.
 - **App Store** — the NAS stack at the top (nginx, orion-api, smbd), the apps
   this container can really install with apt, and the systemd units behind them
   with start, stop and restart. Nothing is simulated: dpkg decides whether an app
@@ -60,6 +61,13 @@ The dev server proxies `/api` to `http://127.0.0.1:8099` by default; set
 | `POST /api/users/{slug}/password` | create or reset that space's Samba account |
 | `POST /api/users` | create a person's folder and record it in `.orion/spaces.json` |
 | `DELETE /api/users/{slug}` | move that folder to `.orion/trash` and forget it |
+
+The three user routes require an administrator, and the check is server-side:
+`POST`/`DELETE /api/users` and `POST /api/users/{slug}/password` answer 403 to
+a member, and an agency admin may only touch spaces filed under their own
+agency — never their own, and never another agency admin. `GET /api/state`
+carries the answer (`session` plus a `manageable` flag per space) so the UI can
+mirror it instead of guessing.
 
 A space is a directory: `/srv/storage/Users/<slug>`, named from the person with a
 numeric suffix when two people share a name. Removing one goes through Trash like
@@ -298,6 +306,27 @@ directory, and those are deliberately two different lists:
 Every signed-in visitor sees the same desktop and every space in it. A space groups
 one person's files; it does not hide them from the others. Removing a space from
 Settings does not end anyone's session either — sign out at the edge does that.
+
+### Who may administer accounts
+
+Roles are data matched against the signed-in address, so they survive a new
+browser and a new proxy cookie:
+
+| Role | Can |
+| --- | --- |
+| **Platform admin** | every account on the box: add, remove, re-key, appoint an agency admin |
+| **Agency admin** | the people filed under their own space — add members, remove them, re-key their SMB account. Not their own space, not other agencies |
+| **Member** | their own folder and share; sees every space, changes none |
+
+A platform admin is granted by membership of the provider group
+`orion-platform-admins`, or by appearing in `.orion/platform-admins.json`. The
+first address to reach a box with no admins recorded is written into that file,
+so a fresh install cannot lock itself out. An agency admin is a space whose
+`role` is `Agency admin` — appointing one is a platform-admin action, and the
+space they create is the agency other people are filed under.
+
+Settings → Users shows the role of the current session and states its scope, and
+only offers the buttons the API would accept.
 
 Two things watch that. `deploy/sso/authentik-audit.py` is the read-only human audit: who
 is privileged, who is dormant, which group is the widest, and whether any non-human

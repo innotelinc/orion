@@ -19,6 +19,7 @@ import type {
   NotificationItem,
   RootEntry,
   ServiceAction,
+  Session,
   Settings,
   Space,
   StorageState,
@@ -65,6 +66,7 @@ interface AppContextValue {
   files: FileNode[]
   roots: RootEntry[]
   storage: StorageState
+  session: Session
   users: UserAccount[]
   spaces: Space[]
   apps: AppEntry[]
@@ -84,6 +86,7 @@ interface AppContextValue {
     email: string
     role: UserRole
     password?: string
+    agency?: string
   }) => Promise<ActionResult>
   removeSpace: (id: string) => Promise<ActionResult>
   setSpacePassword: (id: string, password: string) => Promise<ActionResult>
@@ -130,6 +133,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<StatePayload>({
     files: [],
     storage: EMPTY_STORAGE,
+    session: {
+      role: 'Anonymous',
+      email: '',
+      agency: '',
+      permissions: { manageUsers: false, scope: 'none', agency: '' },
+    },
     users: [],
     spaces: [],
     apps: [],
@@ -387,6 +396,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       email: string
       role: UserRole
       password?: string
+      agency?: string
     }): Promise<ActionResult> => {
       try {
         const { space } = await api.createSpace(input)
@@ -527,6 +537,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       files: state.files,
       roots: state.roots,
       storage: state.storage,
+      session: state.session,
       users: state.users,
       spaces: state.spaces,
       apps: state.apps,
