@@ -1,0 +1,8 @@
+# The shell scripts below run inside Linux containers. A CRLF checkout would
+# make them fail with "bad interpreter: /usr/bin/env: 'bash\r'", so keep them LF
+# on every platform.
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+*.conf text eol=lf
+*.py text eol=lf
