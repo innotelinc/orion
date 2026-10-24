@@ -683,6 +683,36 @@
   color: var(--text);
   white-space: nowrap;
 }
+.share-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 8px;
+  border-radius: 7px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.share-paths__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+}
+.share-paths__row > span {
+  width: 74px;
+  flex: none;
+  color: var(--text-dim);
+}
+.share-paths__row > code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 10px;
+}
 .user-row__locked {
   display: inline-flex;
   align-items: center;

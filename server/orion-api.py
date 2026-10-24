@@ -796,14 +796,24 @@ def spaces_facts(session: dict | None = None) -> list[dict]:
     return [space_facts(space, index, session) for index, space in enumerate(present)]
 
 
-def create_space(payload: dict, session: dict | None = None) -> dict:
+def create_space(
+    payload: dict,
+    session: dict | None = None,
+    provision: bool = True,
+    granted: bool = False,
+) -> dict:
     """Add a person. Who may do so, and for whom, is decided here rather than
     in the browser: a platform admin anywhere, an agency admin only under their
     own agency and never as another agency admin.
+
+    `granted` is for the one caller that is not an administrator: a signed-in
+    person creating their own space (`create_own_space`). `provision` is false
+    there too, because they already have a directory account — making one would
+    delete the account they signed in with.
     """
     session = session or session_facts(None)
     permissions = session.get("permissions") or {}
-    if not permissions.get("manageUsers"):
+    if not granted and not permissions.get("manageUsers"):
         raise PermissionError("only an administrator can add accounts")
     name = str(payload.get("name", "")).strip()
     email = str(payload.get("email", "")).strip().lower()
@@ -831,7 +841,9 @@ def create_space(payload: dict, session: dict | None = None) -> dict:
 
     root = users_root()
     root.mkdir(parents=True, exist_ok=True)
-    base = slug_for(name)
+    # A caller may pin the account name (their own username, so Windows sees the
+    # name they log in with); otherwise it comes from the person's name.
+    base = slug_for(str(payload.get("username") or name))
     slug = base
     counter = 2
     while any(str(space["slug"]) == slug for space in spaces) or (root / slug).exists():
@@ -846,7 +858,7 @@ def create_space(payload: dict, session: dict | None = None) -> dict:
         # A person with an address can sign in as well as mount the share, but
         # only where the host has directory credentials. One password for both,
         # and the account is born in the group the edge proxy lets through.
-        if password and email and directory_ready():
+        if provision and password and email and directory_ready():
             signin = create_signin(slug, name, email, password)
         smb = bool(password)
     except Exception:
@@ -943,6 +955,87 @@ def set_space_password(slug: str, password: str, session: dict | None = None) ->
     save_spaces(spaces)
     apply_smb_conf()
     return space_facts(space, spaces.index(space), session)
+
+
+def create_own_space(identity: dict | None, payload: dict, session: dict | None = None) -> dict:
+    """The signed-in person's own folder, named after their account.
+
+    Anybody may do this once, for themselves: a space is a folder, and asking an
+    administrator for your own folder is friction with no security in it. The
+    account name is their provider username where there is one, which is the
+    name Windows will ask for. No directory account is created — they are here
+    because they already have one.
+    """
+    if not identity or not identity.get("email"):
+        raise PermissionError("sign in first: a space belongs to an address")
+    email = str(identity["email"]).strip().lower()
+    existing = space_by_email(email)
+    if existing is not None:
+        raise ValueError(f"you already have a space: {existing['slug']}")
+    username = slug_for(
+        str(identity.get("username") or identity.get("name") or email.split("@")[0])
+    )
+    if any(str(space["slug"]) == username for space in load_spaces()):
+        raise ValueError("a space already uses your account name; ask an administrator")
+    name = str(identity.get("name") or identity.get("username") or email)
+    return create_space(
+        {
+            "name": name,
+            "email": email,
+            "role": "Member",
+            "username": username,
+            "password": str(payload.get("password") or ""),
+        },
+        session,
+        provision=False,
+        granted=True,
+    )
+
+
+def change_own_password(identity: dict | None, password: str) -> dict:
+    """Reset the password the signed-in person signs in and mounts with.
+
+    Only ever the caller's own account: the target is derived from the forwarded
+    identity, never from the request, so this route cannot be pointed at somebody
+    else. The share is created on the first call if they had none.
+    """
+    if not identity or not identity.get("email"):
+        raise PermissionError("sign in first: the password belongs to an address")
+    if len(password) < 8:
+        raise ValueError("use at least 8 characters")
+    email = str(identity["email"]).strip().lower()
+    username = slug_for(
+        str(identity.get("username") or identity.get("name") or email.split("@")[0])
+    )
+    spaces = load_spaces()
+    space = space_by_email(email) or next(
+        (item for item in spaces if str(item["slug"]) == username), None
+    )
+    changed_share = False
+    if space is not None and samba_installed():
+        write_smb_password(
+            str(space["slug"]),
+            str(space.get("name") or space["slug"]),
+            password,
+            adopt=bool(space.get("smb")),
+        )
+        space["smb"] = True
+        save_spaces(spaces)
+        apply_smb_conf()
+        changed_share = True
+    changed_signin = False
+    if directory_ready() and directory_user(username) is not None:
+        update_signin_password(username, password)
+        changed_signin = True
+    if not changed_share and not changed_signin:
+        raise ValueError(
+            "this host has neither a share nor a directory account for you yet"
+        )
+    return {
+        "share": changed_share,
+        "signin": changed_signin,
+        "slug": str(space["slug"]) if space else "",
+    }
 
 
 def remove_share(slug: str, session: dict | None = None) -> dict:
@@ -2340,6 +2433,16 @@ class Handler(BaseHTTPRequestHandler):
                 session = session_facts(self.identity())
                 space = set_space_password(slug, str(payload.get("password") or ""), session)
                 self.json({"ok": True, "space": space})
+                return
+            if route == "/api/me/space":
+                identity = self.identity()
+                session = session_facts(identity)
+                space = create_own_space(identity, self.body(), session)
+                self.json({"ok": True, "space": space}, HTTPStatus.CREATED)
+                return
+            if route == "/api/me/password":
+                changed = change_own_password(self.identity(), str(self.body().get("password") or ""))
+                self.json({"ok": True, **changed})
                 return
             if route.startswith("/api/users/") and route.endswith("/role"):
                 slug = urllib.parse.unquote(route[len("/api/users/") :].removesuffix("/role"))

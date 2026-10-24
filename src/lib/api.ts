@@ -113,6 +113,13 @@ export const api = {
   service: (unit: string, action: 'start' | 'stop' | 'restart') =>
     post<{ ok: true; unit: string; action: string }>('/api/services', { unit, action }),
 
+  createMySpace: (password: string) =>
+    post<{ ok: true; space: Space }>('/api/me/space', { password }),
+  changeMyPassword: (password: string) =>
+    post<{ ok: true; share: boolean; signin: boolean; slug: string }>('/api/me/password', {
+      password,
+    }),
+
   createSpace: (input: {
     name: string
     email: string

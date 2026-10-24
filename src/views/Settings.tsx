@@ -1,6 +1,7 @@
 import { useState, type CSSProperties, type ReactNode } from 'react'
 import {
   Check,
+  Copy,
   Globe,
   HardDrive,
   Info,
@@ -126,6 +127,8 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
     addSpace,
     removeSpace,
     removeShare,
+    createMySpace,
+    changeMyPassword,
     setSpacePassword,
     setSpaceRole,
     pushToast,
@@ -146,6 +149,12 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
   const [spaceOpen, setSpaceOpen] = useState(false)
   const [removeSpaceTarget, setRemoveSpaceTarget] = useState<Space | null>(null)
   const [spaceBusy, setSpaceBusy] = useState(false)
+  const [mySpaceOpen, setMySpaceOpen] = useState(false)
+  const [mySpacePassword, setMySpacePassword] = useState('')
+  const [myPassword, setMyPassword] = useState('')
+  const [myPasswordRepeat, setMyPasswordRepeat] = useState('')
+  const [myPasswordError, setMyPasswordError] = useState<string | null>(null)
+  const [myPasswordBusy, setMyPasswordBusy] = useState(false)
   const [roleTarget, setRoleTarget] = useState<Space | null>(null)
   const [roleValue, setRoleValue] = useState<UserRole>('Member')
   const [roleError, setRoleError] = useState<string | null>(null)
@@ -153,6 +162,12 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
   const [passwordValue, setPasswordValue] = useState('')
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const smbApp = apps.find((app) => app.id === 'smb')
+  // The signed-in person's own space, matched the way the API matches it: by
+  // the address the proxy forwarded, then by their account name.
+  const mySpace =
+    spaces.find(
+      (space) => space.email && space.email.toLowerCase() === (identity?.email ?? '').toLowerCase(),
+    ) ?? spaces.find((space) => space.slug === identity?.username)
   // Who may administer whom is decided by the API; the UI only mirrors it so a
   // member is not offered buttons the host would refuse.
   const canManageUsers = session.permissions.manageUsers
@@ -190,6 +205,49 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
       return
     }
     setRoleTarget(null)
+  }
+
+  const copySharePath = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value)
+      pushToast({ title: 'Copied', description: value, tone: 'success' })
+    } catch {
+      pushToast({ title: 'Clipboard unavailable', description: value, tone: 'error' })
+    }
+  }
+
+  const submitMySpace = async () => {
+    setSpaceBusy(true)
+    const result = await createMySpace(mySpacePassword)
+    setSpaceBusy(false)
+    if (!result.ok) {
+      setSpaceError(result.error ?? 'The host refused to create it.')
+      return
+    }
+    setMySpaceOpen(false)
+    setMySpacePassword('')
+    setSpaceError(null)
+  }
+
+  const submitMyPassword = async () => {
+    if (myPassword.length < 8) {
+      setMyPasswordError('Use at least 8 characters.')
+      return
+    }
+    if (myPassword !== myPasswordRepeat) {
+      setMyPasswordError('The two passwords do not match.')
+      return
+    }
+    setMyPasswordBusy(true)
+    const result = await changeMyPassword(myPassword)
+    setMyPasswordBusy(false)
+    if (!result.ok) {
+      setMyPasswordError(result.error ?? 'The host refused that password.')
+      return
+    }
+    setMyPassword('')
+    setMyPasswordRepeat('')
+    setMyPasswordError(null)
   }
 
   const submitRemoveShare = async () => {
@@ -604,6 +662,42 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
 
           {tab === 'users' ? (
             <div className="settings-stack">
+              {identity && (!mySpace || !mySpace.smb) ? (
+                <SectionCard
+                  title={mySpace ? 'Your folder is not shared yet' : 'You do not have a space yet'}
+                  description={
+                    mySpace
+                      ? `You have ${mySpace.path}, but nothing exports it. A password shares it — and where the host can, sets your sign-in to the same one.`
+                      : `A space is your folder on this NAS and the thing Windows mounts. Yours is named after your account, ${identity.username || identity.email.split('@')[0]}.`
+                  }
+                  footer={
+                    <>
+                      <span className="settings-dirty">
+                        {identity.email}
+                      </span>
+                      <button
+                        type="button"
+                        className="button button--primary"
+                        onClick={() => {
+                          setSpaceError(null)
+                          setMySpacePassword('')
+                          setMySpaceOpen(true)
+                        }}
+                      >
+                        <UserPlus size={14} aria-hidden="true" />
+                        {mySpace ? 'Set my password' : 'Create my space'}
+                      </button>
+                    </>
+                  }
+                >
+                  <p className="settings-note">
+                    {mySpace
+                      ? `Signing in at the edge is not the same account Windows asks for: it wants “${mySpace.slug}”.`
+                      : 'Nobody else can do this for you, and it gives you no extra rights: one folder, one share, your own password.'}
+                  </p>
+                </SectionCard>
+              ) : null}
+
               <SectionCard
                 title="Spaces"
                 description="One folder per person on the storage volume. A space is a folder, not a session: adding someone creates their folder, and removing them moves it to Trash."
@@ -845,6 +939,70 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                     <dd>restricted to 192.168.1.71 and 127.0.0.1</dd>
                   </div>
                 </dl>
+              </SectionCard>
+
+              <SectionCard
+                title="Change my password"
+                description="One password for the desktop and for your share. It is set by this host, so it is not your Authentik password unless you make it so."
+                footer={
+                  <>
+                    <span className="settings-dirty">
+                      {mySpace ? `share: ${mySpace.slug}` : 'no share yet'}
+                    </span>
+                    <button
+                      type="button"
+                      className="button button--primary"
+                      disabled={myPasswordBusy || myPassword.length < 8}
+                      onClick={() => void submitMyPassword()}
+                    >
+                      <KeyRound size={14} aria-hidden="true" />
+                      {myPasswordBusy ? 'Saving…' : 'Save password'}
+                    </button>
+                  </>
+                }
+              >
+                <div className="field">
+                  <label htmlFor="my-password">New password</label>
+                  <input
+                    id="my-password"
+                    className="input"
+                    type="password"
+                    autoComplete="new-password"
+                    value={myPassword}
+                    onChange={(event) => {
+                      setMyPassword(event.target.value)
+                      setMyPasswordError(null)
+                    }}
+                    placeholder="at least 8 characters"
+                    aria-invalid={Boolean(myPasswordError)}
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="my-password-repeat">Repeat it</label>
+                  <input
+                    id="my-password-repeat"
+                    className="input"
+                    type="password"
+                    autoComplete="new-password"
+                    value={myPasswordRepeat}
+                    onChange={(event) => {
+                      setMyPasswordRepeat(event.target.value)
+                      setMyPasswordError(null)
+                    }}
+                    placeholder="the same password again"
+                  />
+                  {myPasswordError ? (
+                    <span className="field__error" role="alert">
+                      {myPasswordError}
+                    </span>
+                  ) : (
+                    <span className="field__hint">
+                      {identity
+                        ? `Updates your share${smbApp?.installed ? '' : ' once SMB is installed'} and your sign-in at the edge.`
+                        : 'Sign in at the edge first; this changes the account you signed in with.'}
+                    </span>
+                  )}
+                </div>
               </SectionCard>
 
               <div className="settings-split">
@@ -1114,6 +1272,61 @@ systemctl reload nginx`}
       </Modal>
 
       <Modal
+        open={mySpaceOpen}
+        onClose={() => setMySpaceOpen(false)}
+        title={mySpace ? 'Set your share password' : 'Create your space'}
+        description={
+          mySpace
+            ? `Windows will ask for “${mySpace.slug}” and this password when it opens the share.`
+            : `Creates ${identity?.username ? `/Users/${identity.username}` : 'your folder'} and its share, both named after your account.`
+        }
+        size="sm"
+        footer={
+          <>
+            <button type="button" className="button" onClick={() => setMySpaceOpen(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={spaceBusy || mySpacePassword.length < 8}
+              onClick={() => void submitMySpace()}
+            >
+              <KeyRound size={14} aria-hidden="true" />
+              {mySpace ? 'Save password' : 'Create it'}
+            </button>
+          </>
+        }
+      >
+        <div className="field">
+          <label htmlFor="my-space-password">Password</label>
+          <input
+            id="my-space-password"
+            className="input"
+            type="password"
+            autoComplete="new-password"
+            data-autofocus
+            value={mySpacePassword}
+            onChange={(event) => {
+              setMySpacePassword(event.target.value)
+              setSpaceError(null)
+            }}
+            placeholder="at least 8 characters"
+            aria-invalid={Boolean(spaceError)}
+          />
+          {spaceError ? (
+            <span className="field__error" role="alert">
+              {spaceError}
+            </span>
+          ) : (
+            <span className="field__hint">
+              This is the share password, not your Authentik one. Leave the account you sign in with alone.
+            </span>
+          )}
+        </div>
+      </Modal>
+
+      <Modal
         open={Boolean(roleTarget)}
         onClose={() => setRoleTarget(null)}
         title={roleTarget ? `Change the role of ${roleTarget.name}` : 'Change role'}
@@ -1207,6 +1420,29 @@ systemctl reload nginx`}
           </>
         }
       >
+        {passwordTarget ? (
+          <div className="share-paths">
+            {[
+              { label: 'Windows', value: `\\\\ORION-NAS\\${passwordTarget.slug}` },
+              { label: 'macOS / Linux', value: `smb://orion-nas.local/${passwordTarget.slug}` },
+              { label: 'Username', value: passwordTarget.slug },
+            ].map((entry) => (
+              <div className="share-paths__row" key={entry.label}>
+                <span>{entry.label}</span>
+                <code>{entry.value}</code>
+                <button
+                  type="button"
+                  className="icon-button icon-button--sm"
+                  aria-label={`Copy the ${entry.label} value`}
+                  title={`Copy ${entry.value}`}
+                  onClick={() => void copySharePath(entry.value)}
+                >
+                  <Copy size={13} aria-hidden="true" />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div className="field">
           <label htmlFor="space-password-set">Password</label>
           <input

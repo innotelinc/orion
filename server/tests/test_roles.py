@@ -243,6 +243,53 @@ class RoleTestCase(unittest.TestCase):
         self.assertEqual(spaced["member-one"]["role"], "Agency admin")
         self.assertTrue(spaced["member-one"]["manageable"])
 
+    # -- a person's own space and password --------------------------------
+
+    def test_a_signed_in_person_can_create_their_own_space(self):
+        self.api.create_signin = lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("own space must not create a second directory account")
+        )
+        self.api.directory_ready = lambda: True
+        self.api.samba_installed = lambda: True
+        person = identity("self@example.test")
+        space = self.api.create_own_space(
+            person, {"password": "a-long-password"}, self.api.session_facts(person)
+        )
+        self.assertEqual(space["slug"], "self")
+        self.assertEqual(space["email"], "self@example.test")
+        self.assertEqual(space["role"], "Member")
+        self.assertEqual(space["signin"], "")
+        self.assertTrue(space["smb"])
+        # Once is the rule for a self-made space, not a way to make a second.
+        with self.assertRaises(ValueError):
+            self.api.create_own_space(person, {"password": "a-long-password"}, self.admin)
+
+    def test_own_space_needs_an_identity(self):
+        with self.assertRaises(PermissionError):
+            self.api.create_own_space(None, {"password": "a-long-password"}, self.admin)
+
+    def test_own_password_changes_the_share_and_the_sign_in(self):
+        person = identity("self@example.test")
+        self.api.samba_installed = lambda: True
+        self.api.create_own_space(person, {"password": "a-long-password"}, self.admin)
+        self.api.directory_ready = lambda: True
+        self.api.directory_user = lambda username: {"pk": 42, "username": username}
+        changed = []
+        self.api.update_signin_password = lambda username, password: changed.append(
+            (username, password)
+        )
+        result = self.api.change_own_password(person, "another-long-password")
+        self.assertTrue(result["share"])
+        self.assertTrue(result["signin"])
+        self.assertEqual(result["slug"], "self")
+        self.assertEqual(changed, [("self", "another-long-password")])
+
+    def test_own_password_needs_a_signed_in_person(self):
+        with self.assertRaises(PermissionError):
+            self.api.change_own_password(None, "a-long-password")
+        with self.assertRaises(ValueError):
+            self.api.change_own_password(identity("self@example.test"), "short")
+
     # -- sign-in provisioning ---------------------------------------------
 
     def test_a_person_with_an_address_gets_a_sign_in_only_when_configured(self):

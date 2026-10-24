@@ -60,6 +60,8 @@ The dev server proxies `/api` to `http://127.0.0.1:8099` by default; set
 | `POST /api/apps` | install or remove a catalogue app with apt |
 | `POST /api/users/{slug}/password` | create or reset that space's Samba account and sign-in |
 | `DELETE /api/users/{slug}/share` | remove the Samba account and share, keeping folder and sign-in |
+| `POST /api/me/space` | the signed-in person's own folder and share, named after their account |
+| `POST /api/me/password` | change the signed-in person's own share and sign-in password |
 | `POST /api/users/{slug}/role` | appoint an agency admin, or put one back to member (platform admin only) |
 | `POST /api/users` | create a person's folder and record it in `.orion/spaces.json` |
 | `DELETE /api/users/{slug}` | move that folder to `.orion/trash` and forget it |
@@ -111,7 +113,25 @@ the usernames are not: Authentik knows `dhunter`, Samba knows `household`.
 Settings → Users → **SMB** also removes a share (`DELETE
 /api/users/{slug}/share`). It deletes the Samba account and the exported share
 and marks the space unshared; the folder, its files and any sign-in stay, and
-setting a password again brings the share back.
+setting a password again brings the share back. The same dialog lists the two
+addresses a client can use — `\\ORION-NAS\<slug>` and
+`smb://orion-nas.local/<slug>` — and the username, each with a copy button.
+
+### Your own space, without asking an admin
+
+Any signed-in person can create their own space (`POST /api/me/space`), named
+after their provider username so the share matches the login Windows asks for
+(`dhunter` → `\\ORION-NAS\dhunter`). It is created as a member space with one
+password; it grants no administration, and there is no second one — the address
+only ever has one space. Because they already signed in with an account, this
+path deliberately does **not** create a directory account: doing so would delete
+the one they are using.
+
+`POST /api/me/password` changes that same password. The target is derived from
+the forwarded identity, never from the request body, so the route cannot be
+pointed at another account. It updates the share and, where the directory
+client is configured, the provider password too — which is why Settings →
+Security offers it as “Change my password”.
 
 ### The name on the LAN
 
@@ -372,6 +392,17 @@ permission would let the service account escalate itself in one PATCH.
 The proxy has to allow the group too, or a provisioned account is refused before
 it reaches the desktop: `--allowed-group=orion-users` sits beside `Incus`,
 `Cerulean` and `authentik Admins` in `orion-sso`.
+
+One caveat worth knowing before trusting the design: Authentik cannot scope
+`reset_user_password` to accounts that do not exist yet, so the service account
+holds it globally. It cannot create a superuser, join `authentik Admins`, mint a
+token for someone else, or make itself an administrator — all four are checked
+by the script — but in principle it could reset an existing account's password.
+Nothing in Orion accepts a reset target from the browser: the password routes
+derive it from the forwarded identity or from a space the caller may already
+manage. The credential lives only in `/etc/orion/sso-admin.env` (0600, inside the
+container); to rotate it, delete the `orion-provisioner` token in Authentik and
+re-run `provision-orion-access.py`.
 
 Two things watch that. `deploy/sso/authentik-audit.py` is the read-only human audit: who
 is privileged, who is dormant, which group is the widest, and whether any non-human

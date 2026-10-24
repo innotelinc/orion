@@ -94,6 +94,8 @@ interface AppContextValue {
   setSpacePassword: (id: string, password: string) => Promise<ActionResult>
   setSpaceRole: (id: string, role: UserRole) => Promise<ActionResult>
   removeShare: (id: string) => Promise<ActionResult>
+  createMySpace: (password: string) => Promise<ActionResult>
+  changeMyPassword: (password: string) => Promise<ActionResult>
   installApp: (id: string) => Promise<ActionResult>
   removeApp: (id: string) => Promise<ActionResult>
   dismissNotification: (id: string) => void
@@ -474,6 +476,56 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [loadState, pushToast],
   )
 
+  const createMySpace = useCallback(
+    async (password: string): Promise<ActionResult> => {
+      try {
+        const { space } = await api.createMySpace(password)
+        await loadState()
+        pushToast({
+          title: `Your space is ready: ${space.slug}`,
+          description: space.smb
+            ? `Mount \\\\ORION-NAS\\${space.slug} as “${space.slug}”.`
+            : `${space.path} — set a password in Settings → Users to share it.`,
+          tone: 'success',
+        })
+        return { ok: true }
+      } catch (failure) {
+        return {
+          ok: false,
+          error: failure instanceof Error ? failure.message : 'The host refused to create it.',
+        }
+      }
+    },
+    [loadState, pushToast],
+  )
+
+  const changeMyPassword = useCallback(
+    async (password: string): Promise<ActionResult> => {
+      try {
+        const result = await api.changeMyPassword(password)
+        await loadState()
+        const parts = [
+          result.share ? 'your share' : '',
+          result.signin ? 'your sign-in' : '',
+        ].filter(Boolean)
+        pushToast({
+          title: parts.length ? `Password changed for ${parts.join(' and ')}` : 'Password changed',
+          description: result.share
+            ? `Windows still asks for “${result.slug}” with this password.`
+            : undefined,
+          tone: 'success',
+        })
+        return { ok: true }
+      } catch (failure) {
+        return {
+          ok: false,
+          error: failure instanceof Error ? failure.message : 'The host refused that password.',
+        }
+      }
+    },
+    [loadState, pushToast],
+  )
+
   const removeShare = useCallback(
     async (id: string): Promise<ActionResult> => {
       try {
@@ -614,6 +666,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setSpacePassword,
       setSpaceRole,
       removeShare,
+      createMySpace,
+      changeMyPassword,
       installApp,
       removeApp,
       dismissNotification,
@@ -645,6 +699,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setSpacePassword,
       setSpaceRole,
       removeShare,
+      createMySpace,
+      changeMyPassword,
       installApp,
       removeApp,
       dismissNotification,
