@@ -16,7 +16,7 @@ import { Settings } from './views/Settings'
 const PAGE_TITLES: Record<RouteName, string> = {
   dashboard: 'Dashboard',
   files: 'Files',
-  apps: 'Services',
+  apps: 'Apps',
   storage: 'Storage',
   settings: 'Settings',
 }

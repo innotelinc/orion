@@ -3,6 +3,7 @@ import {
   Bell,
   BellRing,
   CheckCheck,
+  LogOut,
   Moon,
   Search,
   Server,
@@ -12,6 +13,7 @@ import {
 import { useClickOutside } from '../hooks/useClickOutside'
 import { useApp } from '../context/AppContext'
 import { classNames } from '../lib/format'
+import { signOut } from '../lib/session'
 import { Avatar } from './ui/Avatar'
 import type { NavigateOptions, RouteName } from '../hooks/useRoute'
 import type { NotificationItem } from '../types'
@@ -237,6 +239,17 @@ export function TitleBar({ resolvedTheme, onToggleTheme, onOpenPalette, navigate
             size="sm"
           />
         </button>
+        {system?.identity ? (
+          <button
+            type="button"
+            className="icon-button"
+            onClick={signOut}
+            aria-label={`Sign out ${system.identity.email}`}
+            title={`Sign out ${system.identity.email}`}
+          >
+            <LogOut size={17} aria-hidden="true" />
+          </button>
+        ) : null}
       </div>
     </header>
   )
