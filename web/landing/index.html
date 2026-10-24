@@ -102,6 +102,19 @@
       border-color: var(--ink-faint);
     }
 
+    /* Filled in by the script at the end of the page: the address the proxy
+       forwarded, or the static label if nothing answers. */
+    .pill--identity {
+      max-width: 46vw;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .pill--identity[data-signed-in] {
+      color: var(--ink);
+      border-color: rgba(10, 99, 255, .55);
+    }
+
     .hero {
       display: grid;
       grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr);
@@ -286,7 +299,7 @@
         <div class="bar__tag">nas.innotel.us</div>
       </div>
       <span class="bar__spacer"></span>
-      <span class="pill">Sign-in required</span>
+      <span class="pill pill--identity" id="session-pill">Sign-in required</span>
       <a
         class="pill"
         href="/oauth2/sign_out?rd=https%3A%2F%2Fauth.cerulean.innotel.us%2Fapplication%2Fo%2Forion%2Fend-session%2F"
@@ -390,5 +403,24 @@
       <span><a href="/app/">Open the desktop</a> · <a href="/health">Health</a></span>
     </footer>
   </div>
+
+  <script>
+    // This page is a static file, so the only thing that knows who is signed in
+    // is the API the edge forwards identity headers to. Until it answers, the
+    // pill keeps saying "Sign-in required" rather than guessing.
+    fetch('/api/system', { credentials: 'same-origin' })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((system) => {
+        const identity = system && system.identity
+        if (!identity || !identity.email) return
+        const pill = document.getElementById('session-pill')
+        if (!pill) return
+        pill.textContent = identity.email
+        pill.title = 'Signed in as ' + identity.email +
+          (identity.groups && identity.groups.length ? ' \u00b7 ' + identity.groups.join(', ') : '')
+        pill.setAttribute('data-signed-in', '')
+      })
+      .catch(() => {})
+  </script>
 </body>
 </html>

@@ -105,12 +105,13 @@ deploy; Settings → About reads it.
 - `point-npm.py` — repoints the NPM proxy host at the sign-in proxy, keeping its
   certificate.
 
-The proxy forwards the signed-in address as `X-Auth-Request-Email`, which the API
-shows as the current session. Settings → Users offers **Sign out**, and the landing
-page's title bar carries the same link, so signing out never requires opening the
-desktop. Both go to `/oauth2/sign_out` with Authentik's `end-session` flow as the
-redirect: clearing only the proxy cookie signs the browser straight back in,
-because the provider still remembers it.
+The proxy forwards the signed-in address as `X-Auth-Request-Email`. The API shows
+it as the current session, and the landing page's title bar prints it once
+`/api/system` answers. Settings → Users offers **Sign out**, and the
+landing page carries the same link in that bar, so signing out never requires
+opening the desktop. Both go to `/oauth2/sign_out` with Authentik's `end-session`
+flow as the redirect: clearing only the proxy cookie signs the browser straight
+back in, because the provider still remembers it.
 
 Three things about that chain fail quietly, so they are part of the deploy rather
 than something to rediscover:
