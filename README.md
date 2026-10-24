@@ -189,18 +189,36 @@ https://nas.innotel.us.
 
 ### Publishing
 
+The container is the only thing that builds and installs the site, so what is
+live is always a commit on `origin/main` — not somebody's working tree:
+
 ```bash
-npm run build
-tar -C dist -cf - . | incus exec i1move:nas -- tar -C /var/www/orion -xf -
-incus file push web/landing/index.html i1move:nas/var/www/orion-landing/index.html
-incus file push server/orion-api.py i1move:nas/opt/orion/orion-api.py
-incus file push deploy/orion-api.service i1move:nas/etc/systemd/system/orion-api.service
-incus file push deploy/nas.innotel.us.conf i1move:nas/etc/nginx/sites-enabled/orion.conf
-incus exec i1move:nas -- systemctl restart orion-api
+git push
+scripts/deploy.sh              # origin/main
+scripts/deploy.sh <sha>        # a specific published commit
 ```
 
-Write `/opt/orion/version.json` (`{"version","build","builtAt"}`) during the
-deploy; Settings → About reads it.
+`scripts/deploy.sh` is a thin client: it hands the request to
+`/opt/orion/deploy.sh` inside the container (`deploy/incus-deploy.sh` in this
+repo). It needs the `incus` CLI, or `ORION_DEPLOY_SSH=root@<incus host>`; with
+neither it prints the route to use. On the estate the path is
+
+```bash
+ssh root@192.168.1.71 "ssh root@192.168.1.51 'incus exec nas -- /opt/orion/deploy.sh'"
+```
+
+What the container does, in order: takes a `flock` so two terminals can never
+install at once; fetches `origin/main`; **refuses a commit that is not on the
+branch**, which is how an older local build once replaced a newer one; builds
+in a staging directory; swaps `/var/www/orion` into place with one rename;
+installs the landing page, API, unit and vhost; writes `/opt/orion/version.json`
+from `package.json` and the commit; restarts the API; then probes `/api/system`
+and `/health` and puts the previous build back if they fail. Every run appends
+to `/var/log/orion-deploy.log`.
+
+There is no reason to copy files into the container by hand: anything installed
+that way is gone at the next deploy, and it is exactly the state that two
+terminals used to fight over.
 
 ### Sign-in
 
