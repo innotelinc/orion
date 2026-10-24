@@ -524,6 +524,48 @@ class ShareClientTestCase(unittest.TestCase):
         self.assertEqual(facts["clients"], [])
         self.assertIsNone(facts["lastClient"])
 
+    def test_a_new_machine_is_noticed_once_and_named(self):
+        self.api.smb_status = lambda: {
+            "tcons": {
+                "1": {"service": "Ada Lovelace", "machine": "DESKTOP-7Q4", "connected_at": "2026-10-24T09:15:00"}
+            }
+        }
+        self.api.share_client_map(self.api.load_spaces(), ttl=0)
+        notices = self.api.share_notices()
+        self.assertEqual(len(notices), 1)
+        self.assertIn("DESKTOP-7Q4", notices[0]["title"])
+        self.assertIn("Ada Lovelace", notices[0]["title"])
+        self.assertEqual(notices[0]["action"]["path"], f"/Users/{self.space['slug']}")
+        self.assertEqual(notices[0]["tone"], "success")
+        # The same session, read again, is not a second connection.
+        self.api.CLIENT_CACHE.update({"key": None, "at": 0.0, "value": {}})
+        self.api.share_client_map(self.api.load_spaces(), ttl=0)
+        self.assertEqual(len(self.api.share_notices()), 1)
+        stored = json.loads((self.root / ".orion" / "share-clients.json").read_text())
+        self.assertEqual(len(stored["machines"][self.space["slug"]]), 1)
+
+    def test_a_connection_from_last_week_is_not_news(self):
+        self.api.smb_status = lambda: {
+            "tcons": {
+                "1": {"service": "Ada Lovelace", "machine": "DESKTOP-7Q4", "connected_at": "2026-10-24T09:15:00"}
+            }
+        }
+        self.api.share_client_map(self.api.load_spaces(), ttl=0)
+        stored = json.loads((self.root / ".orion" / "share-clients.json").read_text())
+        stored["machines"][self.space["slug"]]["DESKTOP-7Q4"] -= 8 * 24 * 3600
+        (self.root / ".orion" / "share-clients.json").write_text(json.dumps(stored))
+        self.assertEqual(self.api.share_notices(), [])
+
+    def test_a_notice_for_a_share_that_is_gone_is_dropped(self):
+        self.api.smb_status = lambda: {
+            "tcons": {
+                "1": {"service": "Ada Lovelace", "machine": "DESKTOP-7Q4", "connected_at": "2026-10-24T09:15:00"}
+            }
+        }
+        self.api.share_client_map(self.api.load_spaces(), ttl=0)
+        self.api.delete_space(self.space["slug"], self.admin)
+        self.assertEqual(self.api.share_notices(), [])
+
     def test_removing_the_person_forgets_their_machine(self):
         self.api.smb_status = lambda: {
             "tcons": {
@@ -533,7 +575,9 @@ class ShareClientTestCase(unittest.TestCase):
         self.api.share_client_map(self.api.load_spaces(), ttl=0)
         self.api.delete_space(self.space["slug"], self.admin)
         stored = self.root / ".orion" / "share-clients.json"
-        self.assertEqual(json.loads(stored.read_text())["shares"], {})
+        saved = json.loads(stored.read_text())
+        self.assertEqual(saved["shares"], {})
+        self.assertEqual(saved["machines"], {})
 
     def test_unsharing_forgets_their_machine(self):
         self.api.smb_status = lambda: {
@@ -545,7 +589,9 @@ class ShareClientTestCase(unittest.TestCase):
         self.api.smb_status = lambda: {}
         self.api.remove_share(self.space["slug"], self.admin)
         stored = self.root / ".orion" / "share-clients.json"
-        self.assertEqual(json.loads(stored.read_text())["shares"], {})
+        saved = json.loads(stored.read_text())
+        self.assertEqual(saved["shares"], {})
+        self.assertEqual(saved["machines"], {})
 
 
 if __name__ == "__main__":

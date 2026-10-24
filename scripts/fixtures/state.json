@@ -160,7 +160,17 @@
       "running": true
     }
   ],
-  "notifications": [],
+  "notifications": [
+    {
+      "id": "n-share-ada-desktop-7q4",
+      "title": "DESKTOP-7Q4 connected to Ada",
+      "body": "First seen just now on \\\\ORION-NAS\\ada. New connections are remembered once.",
+      "tone": "success",
+      "time": "just now",
+      "read": false,
+      "action": { "label": "Open the share", "route": "files", "path": "/Users/ada" }
+    }
+  ],
   "roots": [
     { "label": "media", "path": "/media" },
     { "label": "Users", "path": "/Users" }

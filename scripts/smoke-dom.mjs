@@ -188,6 +188,15 @@ const dashboardShares = {
   live: window.document.querySelectorAll('.shares-card .share-dot--live').length,
   namesTheClient: window.document.body.textContent.includes('DESKTOP-7Q4'),
 }
+// A machine arriving is a server notification, so it has to reach both the
+// notice card and the bell's unread count.
+const shareNotice = {
+  cards: window.document.querySelectorAll('.notice-card').length,
+  namesMachine: [...window.document.querySelectorAll('.notice-card')].some((node) =>
+    node.textContent.includes('DESKTOP-7Q4'),
+  ),
+  unread: window.document.querySelector('.titlebar .notif-dot')?.textContent ?? null,
+}
 
 const text = window.document.body.textContent.replace(/\s+/g, ' ')
 const summary = {
@@ -217,6 +226,7 @@ const summary = {
     shareDialog,
     filesShares,
     dashboardShares,
+    shareNotice,
   },
   headings: [...window.document.querySelectorAll('h1, h2')].map((node) => node.textContent.trim()).slice(0, 8),
   errors: errors.slice(0, 3),
@@ -243,5 +253,7 @@ const broken =
   summary.routes.filesShares.live === 0 ||
   !summary.routes.dashboardShares.card ||
   !summary.routes.dashboardShares.namesTheClient ||
-  summary.routes.dashboardShares.live === 0
+  summary.routes.dashboardShares.live === 0 ||
+  !summary.routes.shareNotice.namesMachine ||
+  !summary.routes.shareNotice.unread
 process.exit(broken ? 1 : 0)

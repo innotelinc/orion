@@ -123,6 +123,14 @@ reports a machine on the share right now, a grey dot with a time means it was
 used and when, and *Never* means no client has ever opened it. The page reads
 `/api/state` every 20 seconds, so a mount appears within that.
 
+A machine arriving for the first time on a share is also an event: the registry
+keeps the first sighting per machine per share, and a sighting inside the last
+day becomes a notification — *DESKTOP-7Q4 connected to Household* in the bell and
+on the dashboard, with **Open the share** going straight to that folder. It is
+recorded once, so a session left open for a week does not re-notify every poll
+and the same machine reconnecting is quiet; it expires on its own after a day
+rather than being dismissed by hand.
+
 In the share dialog itself, below the paths, the same fact is spelled out in
 full:
 `smbstatus --json` names the machine on every open session, and because that

@@ -1637,31 +1637,56 @@ def trim_fraction(value: str) -> str:
     return f"{base}.{(fraction or '000')[:3]}{zone}"
 
 
-def load_share_clients() -> dict[str, dict]:
+def load_share_registry() -> dict:
+    """The last machine on each share, and when each machine was first seen.
+
+    `shares` is what the dialog shows. `machines` is what makes a connection an
+    event: it remembers the first sighting rather than the current session, so a
+    mount that has been open for a week does not notify again every poll.
+    """
+    empty = {"shares": {}, "machines": {}}
     try:
         payload = json.loads(SHARE_CLIENTS.read_text())
     except (OSError, ValueError):
-        return {}
-    items = payload.get("shares") if isinstance(payload, dict) else None
-    if not isinstance(items, dict):
-        return {}
-    return {str(key): value for key, value in items.items() if isinstance(value, dict)}
+        return empty
+    if not isinstance(payload, dict):
+        return empty
+    shares = payload.get("shares")
+    machines = payload.get("machines")
+    return {
+        "shares": {
+            str(key): value
+            for key, value in (shares if isinstance(shares, dict) else {}).items()
+            if isinstance(value, dict)
+        },
+        "machines": {
+            str(slug): {
+                str(machine): int(seen)
+                for machine, seen in value.items()
+                if str(machine).strip() and isinstance(seen, (int, float))
+            }
+            for slug, value in (machines if isinstance(machines, dict) else {}).items()
+            if isinstance(value, dict)
+        },
+    }
 
 
-def save_share_clients(entries: dict[str, dict]) -> None:
+def save_share_registry(registry: dict) -> None:
     META.mkdir(parents=True, exist_ok=True)
     temporary = SHARE_CLIENTS.with_name(SHARE_CLIENTS.name + ".tmp")
-    temporary.write_text(json.dumps({"shares": entries}, indent=2) + "\n")
+    temporary.write_text(json.dumps(registry, indent=2) + "\n")
     temporary.replace(SHARE_CLIENTS)
 
 
 def forget_share_clients(slug: str) -> None:
-    """Drop the remembered machine when a share or its person goes away."""
-    entries = load_share_clients()
-    if entries.pop(slug, None) is None:
+    """Drop the remembered machines when a share or its person goes away."""
+    registry = load_share_registry()
+    forgotten = registry["shares"].pop(slug, None) is not None
+    forgotten = registry["machines"].pop(slug, None) is not None or forgotten
+    if not forgotten:
         return
     try:
-        save_share_clients(entries)
+        save_share_registry(registry)
     except OSError:
         # Nothing is claimed about a share that is gone either way.
         pass
@@ -1688,15 +1713,24 @@ def share_client_map(spaces: list[dict], ttl: float = 5.0) -> dict[str, dict]:
     for slug, name in names.items():
         by_share[samba_share_label(name).lower()] = slug
         by_share[slug.lower()] = slug
+    registry = load_share_registry()
+    remembered = registry["shares"]
+    first_seen = registry["machines"]
+    changed = False
     live: dict[str, list[dict]] = {}
     for session in parse_share_sessions(smb_status()):
         slug = by_share.get(session["service"].lower())
-        if slug:
-            live.setdefault(slug, []).append(
-                {"machine": session["machine"], "since": session["since"]}
-            )
-    remembered = load_share_clients()
-    changed = False
+        if not slug:
+            continue
+        live.setdefault(slug, []).append(
+            {"machine": session["machine"], "since": session["since"]}
+        )
+        machine = session["machine"]
+        if machine and machine not in first_seen.setdefault(slug, {}):
+            # The moment this machine first appeared here, which is what makes a
+            # connection a one-time event rather than a state to re-notify.
+            first_seen[slug][machine] = int(time.time())
+            changed = True
     for slug, clients in live.items():
         latest = max(clients, key=lambda client: client["since"] or "")
         if not latest["machine"]:
@@ -1707,7 +1741,7 @@ def share_client_map(spaces: list[dict], ttl: float = 5.0) -> dict[str, dict]:
             changed = True
     if changed:
         try:
-            save_share_clients(remembered)
+            save_share_registry(registry)
         except OSError:
             # The live answer is still true; only the memory of it is lost.
             pass
@@ -1717,6 +1751,68 @@ def share_client_map(spaces: list[dict], ttl: float = 5.0) -> dict[str, dict]:
     }
     CLIENT_CACHE.update(key=key, at=now, value=value)
     return value
+
+
+SHARE_NOTICE_WINDOW = 24 * 3600
+
+
+def human_ago(seconds: float) -> str:
+    minutes = int(seconds // 60)
+    if minutes < 1:
+        return "just now"
+    if minutes < 60:
+        return f"{minutes} min ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} hr ago"
+    return f"{hours // 24} days ago"
+
+
+def share_notices(limit: int = 3) -> list[dict]:
+    """Machines that appeared on a share for the first time in the last day.
+
+    The registry keeps the first sighting per machine per share, so this fires
+    once when something new mounts and then goes quiet: a session left open for
+    a week is not news, and the same machine reconnecting is not either. It
+    expires on its own after a day rather than being dismissed by hand.
+    """
+    registry = load_share_registry()
+    names = {str(space["slug"]): str(space.get("name") or space["slug"]) for space in load_spaces()}
+    now = time.time()
+    found: list[tuple[float, dict]] = []
+    for slug, machines in registry["machines"].items():
+        name = names.get(slug)
+        if name is None:
+            # The share is gone; nothing left to notify about.
+            continue
+        for machine, first_seen in machines.items():
+            age = now - first_seen
+            if age < 0 or age > SHARE_NOTICE_WINDOW:
+                continue
+            handle = re.sub(r"[^a-z0-9]+", "-", machine.lower()).strip("-") or "client"
+            found.append(
+                (
+                    age,
+                    {
+                        "id": f"n-share-{slug}-{handle}",
+                        "title": f"{machine} connected to {name}",
+                        "body": (
+                            f"First seen {human_ago(age)} on \\{NETBIOS_NAME}\\{slug}. "
+                            "New connections are remembered once."
+                        ),
+                        "tone": "success",
+                        "time": human_ago(age),
+                        "read": False,
+                        "action": {
+                            "label": "Open the share",
+                            "route": "files",
+                            "path": f"/{USERS_DIR_NAME}/{slug}",
+                        },
+                    },
+                )
+            )
+    found.sort(key=lambda entry: entry[0])
+    return [item for _, item in found[:limit]]
 
 
 def avahi_installed() -> bool:
@@ -2175,7 +2271,9 @@ def render_health_page(facts: dict) -> str:
 
 
 def notifications_facts(storage: dict, services: list[dict]) -> list[dict]:
-    items = []
+    # A machine arriving on a share is the one notice that comes from something
+    # happening rather than from a threshold, so it leads the list.
+    items = share_notices()
     for pool in storage["pools"]:
         total = pool["totalBytes"]
         if total and pool["usedBytes"] / total >= 0.9:
