@@ -49,8 +49,11 @@ SMB_GROUP = "orion-nas"
 # One name for the box on the LAN, whatever protocol a client speaks.
 DISCOVERY_NAME = "orion-nas"
 NETBIOS_NAME = "ORION-NAS"
+WORKGROUP = "WORKGROUP"
 AVAHI_CONF = Path("/etc/avahi/avahi-daemon.conf")
 AVAHI_SERVICE = Path("/etc/avahi/services/orion-smb.service")
+# wsdd ships no unit on Ubuntu, only the binary, so Orion writes this one.
+WSDD_UNIT = Path("/etc/systemd/system/wsdd.service")
 APT_TIMEOUT = 900
 
 try:
@@ -98,6 +101,19 @@ APP_CATALOGUE: list[dict] = [
         "category": "Network",
         "packages": ["avahi-daemon"],
         "unit": "avahi-daemon.service",
+    },
+    {
+        "id": "wsd",
+        "name": "Windows discovery",
+        "tagline": f"Listed under Network as {NETBIOS_NAME}",
+        "description": (
+            "Runs wsdd, the Web Service Discovery host daemon. Windows 10 and 11 dropped "
+            "NetBIOS browsing, so SMB alone is invisible in Explorer's Network view; this is "
+            "what puts the box there, under its own name and workgroup."
+        ),
+        "category": "Network",
+        "packages": ["wsdd"],
+        "unit": "wsdd.service",
     },
 ]
 VERSION_FILE = Path(os.environ.get("ORION_VERSION_FILE", "/opt/orion/version.json"))
@@ -898,6 +914,10 @@ def install_app(app_id: str) -> dict:
             # Samba's own NetBIOS name lives in smb.conf, which Orion generated
             # before this app existed; rewrite it so both names agree.
             apply_smb_conf()
+    if app["id"] == "wsd":
+        # The Ubuntu package is the daemon only; the name it announces and the
+        # workgroup it announces into are Orion's to set.
+        apply_wsd()
     facts = app_facts(app)
     if not facts["installed"]:
         raise RuntimeError(f"{app['name']} did not finish installing")
@@ -922,6 +942,14 @@ def remove_app(app_id: str) -> dict:
         for space in spaces:
             space["smb"] = False
         save_spaces(spaces)
+    if app["id"] == "wsd":
+        # dpkg does not own this unit file, so removing the package leaves it.
+        run_root(
+            "set -e\n"
+            f"rm -f {WSDD_UNIT}\n"
+            "systemctl daemon-reload >/dev/null 2>&1 || true\n",
+            timeout=60,
+        )
     return app_facts(app)
 
 
@@ -948,7 +976,7 @@ def render_smb_conf(spaces: list[dict]) -> str:
         "# Managed by Orion. Rewritten whenever a space is added or removed,",
         "# so change the shares in Settings rather than editing this file.",
         "[global]",
-        "   workgroup = WORKGROUP",
+        f"   workgroup = {WORKGROUP}",
         "   server string = Orion NAS",
         f"   netbios name = {NETBIOS_NAME}",
         # Aliases are what let a client mount the box by its mDNS name: Windows
@@ -1063,6 +1091,54 @@ def apply_discovery() -> None:
         stdin_text=service,
         timeout=120,
     )
+
+
+def render_wsdd_unit() -> str:
+    """Announce SMB to Windows, under the name the shares answer to.
+
+    Windows 10/11 no longer browse NetBIOS, so nmbd alone does not put a server
+    in Explorer's Network view; WS-Discovery does. The daemon only makes sense
+    while Samba is running, so the unit follows it.
+    """
+    return (
+        "[Unit]\n"
+        "Description=Web Service Discovery host daemon (Windows network browsing)\n"
+        "Documentation=man:wsdd(1)\n"
+        "After=network-online.target smbd.service\n"
+        "Wants=network-online.target\n"
+        "ConditionPathExists=/etc/samba/smb.conf\n"
+        "\n"
+        "[Service]\n"
+        "Type=simple\n"
+        f"ExecStart=/usr/bin/wsdd --hostname {NETBIOS_NAME} --workgroup {WORKGROUP} --ipv4only\n"
+        "Restart=on-failure\n"
+        "RestartSec=3\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=multi-user.target\n"
+    )
+
+
+def apply_wsd() -> None:
+    """Write and start the wsdd unit Orion manages."""
+    if not which("wsdd"):
+        return
+    unit = render_wsdd_unit()
+    run_root(
+        "set -e\n"
+        f"cat > {WSDD_UNIT}\n"
+        "systemctl daemon-reload\n"
+        "systemctl enable wsdd.service >/dev/null 2>&1 || true\n"
+        "systemctl restart wsdd.service\n",
+        stdin_text=unit,
+        timeout=120,
+    )
+
+
+def which(binary: str) -> bool:
+    return any((Path(directory) / binary).exists() for directory in os.environ.get(
+        "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    ).split(":"))
 
 
 def write_smb_password(slug: str, name: str, password: str, adopt: bool) -> None:

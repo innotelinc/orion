@@ -71,10 +71,10 @@ It runs as `orion-api.service` and is only reachable through nginx.
 
 ### Apps and SMB
 
-`POST /api/apps` installs one of three catalogue entries with apt: **SMB sharing**
-(`samba`), **NFS server** (`nfs-kernel-server`) and **network discovery**
-(`avahi-daemon`). Only catalogue ids are accepted — the endpoint does not take a
-package name from the browser.
+`POST /api/apps` installs one of the catalogue entries with apt: **SMB sharing**
+(`samba`), **NFS server** (`nfs-kernel-server`), **network discovery**
+(`avahi-daemon`) and **Windows discovery** (`wsdd`). Only catalogue ids are
+accepted — the endpoint does not take a package name from the browser.
 
 The service is `ProtectSystem=strict`, which is what keeps a bug here out of
 `/etc`. apt, `useradd` and `smbpasswd` genuinely need that access, so each change
@@ -99,6 +99,14 @@ publishes `_smb._tcp` through avahi and pins `host-name=orion-nas` in
 `/etc/avahi/avahi-daemon.conf`, so Finder, GNOME and macOS mount
 `smb://orion-nas.local/<space>`. Both come from the app rather than a hand edit,
 so a rebuilt container gets them back by installing the app again.
+
+Being reachable by name is not the same as being **listed**. Windows 10 and 11
+no longer browse NetBIOS, so a working SMB server stays absent from Explorer's
+Network view until something answers WS-Discovery. **Windows discovery**
+installs `wsdd` and writes its unit with the same name and workgroup
+(`ORION-NAS` in `WORKGROUP`); the unit follows Samba and stops with it, so a
+machine without shares announces nothing. macOS and Linux do not need it — they
+use the mDNS record instead.
 
 ## Deployment
 
@@ -219,6 +227,10 @@ to `/var/log/orion-deploy.log`.
 There is no reason to copy files into the container by hand: anything installed
 that way is gone at the next deploy, and it is exactly the state that two
 terminals used to fight over.
+
+The container builds the desktop itself, so it needs room to do it: the live one
+runs with `limits.memory 2GiB`. At the 256 MiB it was created with, `vite` is
+OOM-killed and the only trace is the word `Killed` in the deploy log.
 
 ### Sign-in
 

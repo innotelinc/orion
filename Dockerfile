@@ -24,7 +24,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      nginx python3 samba avahi-daemon dbus tini curl ca-certificates \
+      nginx python3 samba avahi-daemon dbus tini curl ca-certificates wsdd \
  && rm -rf /var/lib/apt/lists/* \
  && rm -f /etc/nginx/sites-enabled/default
 
@@ -36,7 +36,7 @@ RUN chmod +x /usr/local/bin/orion-entrypoint \
  && mkdir -p /srv/storage /var/www/orion
 
 VOLUME ["/srv/storage"]
-EXPOSE 8080 445 139 5353/udp
+EXPOSE 8080 445 139 5353/udp 3702/udp
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS "http://127.0.0.1:${ORION_HTTP_PORT}/api/state" >/dev/null || exit 1

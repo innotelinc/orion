@@ -1,7 +1,7 @@
 {
   "name": "orion",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.8.0",
   "type": "module",
   "description": "Orion — a clean, robust, plug-and-play NAS desktop reconstructed from the ZimaOS workspace.",
   "scripts": {

@@ -35,6 +35,15 @@ if command -v smbd >/dev/null 2>&1; then
   nmbd --daemon >/dev/null 2>&1 || log "nmbd did not start"
 fi
 
+# Windows 10/11 browse by WS-Discovery, not NetBIOS: without wsdd the shares
+# are open but Explorer's Network view stays empty. It announces the same name
+# Samba answers to, so a client can open what it finds.
+if command -v wsdd >/dev/null 2>&1; then
+  wsdd --hostname "${ORION_NETBIOS:-ORION-NAS}" --workgroup "${ORION_WORKGROUP:-WORKGROUP}" \
+    --ipv4only >/dev/null 2>&1 &
+  WSDD=$!
+fi
+
 sed -i "s/__ORION_HTTP_PORT__/${HTTP_PORT}/; s/__ORION_PORT__/${ORION_PORT}/" \
   /etc/nginx/sites-available/orion 2>/dev/null
 ln -sf /etc/nginx/sites-available/orion /etc/nginx/sites-enabled/orion
@@ -50,6 +59,7 @@ shutdown() {
   kill -TERM "$WEB" "$API" 2>/dev/null
   smbcontrol smbd shutdown >/dev/null 2>&1 || pkill -TERM -x smbd 2>/dev/null
   pkill -TERM -x nmbd 2>/dev/null
+  pkill -TERM -x wsdd 2>/dev/null
   pkill -TERM -x avahi-daemon 2>/dev/null
   wait 2>/dev/null
   exit 0
