@@ -153,7 +153,9 @@ interface TitleBarProps {
 
 export function TitleBar({ resolvedTheme, onToggleTheme, onOpenPalette, navigate }: TitleBarProps) {
   const { system, users } = useApp()
-  const currentUser = users.find((user) => user.isCurrent) ?? users[0]
+  // No identity means no session at the edge. Falling back to users[0] would
+  // make the desktop claim whoever sorts first — on this host, root.
+  const currentUser = users.find((user) => user.isCurrent) ?? null
   const address = system?.network.ip || 'no address'
 
   return (
@@ -230,12 +232,12 @@ export function TitleBar({ resolvedTheme, onToggleTheme, onOpenPalette, navigate
           type="button"
           className="profile-button"
           onClick={() => navigate('settings', { tab: 'users' })}
-          aria-label="Open account settings"
-          title={currentUser?.name}
+          aria-label={currentUser ? 'Open account settings' : 'No edge session'}
+          title={currentUser?.name ?? 'No edge session'}
         >
           <Avatar
-            name={currentUser?.name ?? 'Signed in'}
-            color={currentUser?.color ?? '#0a63ff'}
+            name={currentUser?.name ?? '?'}
+            color={currentUser?.color ?? '#64748b'}
             size="sm"
           />
         </button>

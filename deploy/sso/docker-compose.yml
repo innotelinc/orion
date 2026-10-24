@@ -24,6 +24,11 @@ services:
       - --allowed-group=Cerulean
       - --allowed-group=authentik Admins
       - --skip-provider-button=true
+      # Authentik's own session outlives the proxy's cookie: without this the
+      # next request after /oauth2/sign_out is granted silently from that
+      # session and the desktop comes straight back. prompt=login makes the
+      # provider ask for a password again instead.
+      - --prompt=login
       # Uptime probes carry no data, so /health stays open; everything else,
       # the API included, needs a session.
       - --skip-auth-route=^/health$
