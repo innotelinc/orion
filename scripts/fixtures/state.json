@@ -1,0 +1,168 @@
+{
+  "files": [
+    {
+      "id": "/media",
+      "name": "media",
+      "parent": "/",
+      "type": "folder",
+      "size": null,
+      "modifiedAt": "2026-01-01T00:00:00Z",
+      "owner": "ada",
+      "tone": "folder"
+    },
+    {
+      "id": "/media/notes.txt",
+      "name": "notes.txt",
+      "parent": "/media",
+      "type": "file",
+      "size": 42,
+      "modifiedAt": "2026-01-01T00:00:00Z",
+      "owner": "ada",
+      "tone": "document"
+    },
+    {
+      "id": "/Users",
+      "name": "Users",
+      "parent": "/",
+      "type": "folder",
+      "size": null,
+      "modifiedAt": "2026-01-01T00:00:00Z",
+      "owner": "root",
+      "tone": "folder"
+    },
+    {
+      "id": "/Users/ada",
+      "name": "ada",
+      "parent": "/Users",
+      "type": "folder",
+      "size": null,
+      "modifiedAt": "2026-01-01T00:00:00Z",
+      "owner": "ada",
+      "tone": "folder"
+    }
+  ],
+  "storage": {
+    "pools": [
+      {
+        "id": "root",
+        "name": "Root",
+        "mount": "/",
+        "source": "overlay",
+        "usedBytes": 1000000,
+        "totalBytes": 10000000,
+        "freeBytes": 9000000,
+        "health": "Healthy",
+        "kind": "Root"
+      }
+    ],
+    "disks": [
+      {
+        "id": "sda",
+        "name": "sda",
+        "model": "Fixture Disk",
+        "capacityBytes": 10000000,
+        "temperature": 35,
+        "health": "Healthy",
+        "kind": "SSD",
+        "note": "fixture"
+      }
+    ],
+    "files": { "count": 4, "folders": 3, "bytes": 42 }
+  },
+  "session": {
+    "role": "Platform admin",
+    "email": "fixture@example.test",
+    "agency": "",
+    "permissions": { "manageUsers": true, "scope": "all", "agency": "" }
+  },
+  "signin": { "available": true, "group": "orion-users" },
+  "users": [
+    {
+      "id": "space-ada",
+      "name": "Ada",
+      "email": "ada@example.test",
+      "role": "Member",
+      "lastActive": "Space · admin issued",
+      "color": "#0a63ff",
+      "account": "ada",
+      "home": "/Users/ada",
+      "manageable": true
+    }
+  ],
+  "spaces": [
+    {
+      "id": "ada",
+      "slug": "ada",
+      "name": "Ada",
+      "email": "ada@example.test",
+      "role": "Member",
+      "agency": "",
+      "signin": "ada",
+      "path": "/Users/ada",
+      "usedBytes": 0,
+      "createdAt": "2026-01-01T00:00:00Z",
+      "color": "#0a63ff",
+      "smb": true,
+      "manageable": true,
+      "clients": [{ "machine": "DESKTOP-7Q4", "since": "2026-01-01T00:00:00Z" }],
+      "lastClient": { "machine": "DESKTOP-7Q4", "since": "2026-01-01T00:00:00Z" }
+    }
+  ],
+  "apps": [
+    {
+      "id": "smb",
+      "name": "SMB sharing",
+      "tagline": "Share folders with Windows and macOS",
+      "description": "Samba, with one share per space.",
+      "category": "Sharing",
+      "packages": ["samba"],
+      "unit": "smbd.service",
+      "installed": true,
+      "active": true,
+      "state": "active"
+    },
+    {
+      "id": "discovery",
+      "name": "Network discovery",
+      "tagline": "orion-nas.local on the LAN",
+      "description": "avahi publishes the box by name.",
+      "category": "Sharing",
+      "packages": ["avahi-daemon"],
+      "unit": "avahi-daemon.service",
+      "installed": true,
+      "active": true,
+      "state": "active"
+    }
+  ],
+  "services": [
+    {
+      "id": "nginx.service",
+      "name": "nginx",
+      "description": "A high performance web server",
+      "active": "active",
+      "sub": "running",
+      "running": true
+    },
+    {
+      "id": "orion-api.service",
+      "name": "orion-api",
+      "description": "Orion's host API",
+      "active": "active",
+      "sub": "running",
+      "running": true
+    },
+    {
+      "id": "smbd.service",
+      "name": "smbd",
+      "description": "Samba SMB daemon",
+      "active": "active",
+      "sub": "running",
+      "running": true
+    }
+  ],
+  "notifications": [],
+  "roots": [
+    { "label": "media", "path": "/media" },
+    { "label": "Users", "path": "/Users" }
+  ]
+}

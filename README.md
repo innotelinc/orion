@@ -117,6 +117,16 @@ setting a password again brings the share back. The same dialog lists the two
 addresses a client can use — `\\ORION-NAS\<slug>` and
 `smb://orion-nas.local/<slug>` — and the username, each with a copy button.
 
+Below those paths the dialog says whether a client has actually connected:
+`smbstatus --json` names the machine on every open session, and because that
+only reports the present, the API also remembers the last machine it saw for
+each share in `.orion/share-clients.json`. So the three states read differently —
+*DESKTOP-7Q4 is connected*, *last connected 2 hr ago*, and *no machine has opened
+this share yet* — and nobody has to guess whether the path, the account or the
+password was the thing that failed. The remembered machine is written only when
+it changes, and the whole answer is cached for five seconds because `/api/state`
+is polled.
+
 ### Your own space, without asking an admin
 
 Any signed-in person can create their own space (`POST /api/me/space`), named
@@ -419,13 +429,17 @@ temporary account it used has been deleted.
 npm run typecheck
 npm run build
 python3 -m unittest discover -s server/tests -v   # the role rules, on a temp data root
-node scripts/smoke-dom.mjs   # renders the bundle in jsdom against the live API
-ORION_SMOKE_FIXTURES=dir node scripts/smoke-dom.mjs   # same, from saved system/state/metrics JSON
+npm run test:dom             # renders the built bundle in jsdom (fixtures or the container)
+ORION_SMOKE_FIXTURES=dir node scripts/smoke-dom.mjs   # same, from other system/state/metrics JSON
 ```
 
-The smoke script reads `/api/system|state|metrics` from the container and checks
-that the dashboard, files, services, storage and settings routes mount with no
-runtime errors and no API banner.
+The smoke script reads `/api/system|state|metrics` from the container, or from
+`scripts/fixtures/` when there is no `incus` to ask — which is every CI runner.
+It visits every route and every Settings tab, opens the share dialog, and fails
+on a crash, an uncaught error, an API banner, or a page that rendered less than
+a paragraph. That is the check that catches the class of bug which took Settings
+down once already: a value read before its own declaration renders nothing and
+still typechecks, because the read sits inside a callback.
 
 ## Stack
 

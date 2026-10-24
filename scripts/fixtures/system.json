@@ -1,0 +1,33 @@
+{
+  "hostname": "nas",
+  "kernel": "6.8.0-orion",
+  "arch": "x86_64",
+  "cpu": { "model": "Fixture CPU", "cores": 4 },
+  "memory": {
+    "totalBytes": 2147483648,
+    "usedBytes": 536870912,
+    "availableBytes": 1610612736,
+    "percent": 25
+  },
+  "uptimeSeconds": 7260,
+  "runtime": "Incus / LXC",
+  "network": {
+    "interface": "eth0",
+    "method": "dhcp",
+    "ip": "192.0.2.10",
+    "prefix": "24",
+    "gateway": "192.0.2.1",
+    "dns": ["192.0.2.1"],
+    "mac": "02:00:00:00:00:01",
+    "linkMbps": 1000
+  },
+  "storageRoot": "/srv/storage",
+  "version": { "version": "9.9.9", "build": "fixture", "builtAt": "2026-01-01T00:00:00Z" },
+  "identity": {
+    "email": "fixture@example.test",
+    "name": "Fixture Person",
+    "username": "fixture",
+    "groups": ["orion-users"]
+  },
+  "generatedAt": "2026-01-01T00:00:00Z"
+}

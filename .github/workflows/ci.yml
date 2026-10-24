@@ -14,10 +14,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # The desktop is served from the nas container by nginx in front of
-# orion-api.py, so what CI can prove from here is that the bundle typechecks and
-# builds. The API's role rules are unit-tested against a temporary data root;
-# the rest of its behaviour is covered by scripts/smoke-dom.mjs, which needs a
-# running orion-api and the container's real payloads.
+# orion-api.py, so what CI can prove from here is that the bundle typechecks,
+# builds, and renders. The API's role rules are unit-tested against a temporary
+# data root; the pages are rendered headlessly by scripts/smoke-dom.mjs against
+# the committed payloads in scripts/fixtures, so a view that throws on render
+# fails this workflow instead of the box.
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -37,6 +38,12 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # Every route, and every Settings tab, rendered in jsdom against
+      # scripts/fixtures. A crash there is a blank page in production, so it
+      # fails here. `dist/` is the build from the step above.
+      - name: Render
+        run: npm run test:dom
 
   # Who may administer whom is the one part of the API that is pure logic, so it
   # is tested here rather than only on the box: every test builds a throwaway

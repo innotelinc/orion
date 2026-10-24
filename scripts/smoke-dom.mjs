@@ -4,8 +4,9 @@
 //
 // jsdom has no browser engine, so this proves the app mounts, the provider's
 // fetches resolve and real numbers reach the page — not how it looks. The API
-// payloads are read from the container itself; the bundle and those three
-// documents are served from a local port so the page stays same-origin.
+// payloads are read from the container itself, or from scripts/fixtures when
+// there is no incus to ask (CI); the bundle and those three documents are
+// served from a local port so the page stays same-origin.
 import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
@@ -15,9 +16,21 @@ import { JSDOM, VirtualConsole } from 'jsdom'
 
 const dist = fileURLToPath(new URL('../dist/', import.meta.url))
 // Payloads come from the live container when `incus` can reach it, or from a
-// directory of saved JSON (`ORION_SMOKE_FIXTURES=path/to/dir`, with
-// system.json / state.json / metrics.json) on a machine that has no incus.
-const fixtureDir = process.env.ORION_SMOKE_FIXTURES
+// directory of committed JSON (scripts/fixtures, with system.json /
+// state.json / metrics.json) on a machine that has no incus — which is every
+// CI runner. ORION_SMOKE_FIXTURES points at a different directory when the
+// payloads need to be re-captured.
+const hasIncus = (() => {
+  try {
+    execFileSync('incus', ['version'], { stdio: 'ignore', timeout: 10_000 })
+    return true
+  } catch {
+    return false
+  }
+})()
+const fixtureDir =
+  process.env.ORION_SMOKE_FIXTURES ??
+  (hasIncus ? null : fileURLToPath(new URL('./fixtures/', import.meta.url)))
 const fixtures = {}
 for (const [name, path] of [
   ['system', '/api/system'],
@@ -89,6 +102,14 @@ const dom = await JSDOM.fromURL(`${origin}/app/`, {
       disconnect() {}
     }
     window.HTMLElement.prototype.scrollIntoView = function scrollIntoView() {}
+    // jsdom 30 has no modal dialog; the app opens every dialog this way.
+    window.HTMLDialogElement.prototype.showModal = function showModal() {
+      this.open = true
+    }
+    window.HTMLDialogElement.prototype.close = function close() {
+      this.open = false
+      this.dispatchEvent(new window.Event('close'))
+    }
   },
 })
 const { window } = dom
@@ -108,10 +129,35 @@ const appsText = await at('#/apps')
 const unitCards = window.document.querySelectorAll('.store-card').length
 const storageText = await at('#/storage')
 const poolCards = window.document.querySelectorAll('.pool-card').length
-const generalText = await at('#/settings?tab=general')
-const usersText = await at('#/settings?tab=users')
-const aboutText = await at('#/settings?tab=about')
-const settingsText = [generalText, usersText, aboutText].join(' ')
+// Every Settings tab, not just the ones with assertions below: the crash this
+// check exists for (a value read before its declaration) took Settings down on
+// render, and any tab can grow that mistake.
+const tabs = ['general', 'appearance', 'network', 'users', 'security', 'about']
+const tabText = {}
+for (const tab of tabs) tabText[tab] = await at(`#/settings?tab=${tab}`)
+const settingsTabs = Object.fromEntries(
+  Object.entries(tabText).map(([tab, value]) => [
+    tab,
+    { crashed: value.includes('Something went wrong'), chars: value.length },
+  ]),
+)
+const generalText = tabText.general
+const usersText = tabText.users
+const aboutText = tabText.about
+const settingsText = Object.values(tabText).join(' ')
+
+// The share dialog is where a person learns whether a client ever connected, so
+// it is opened here and read: the fixture's space has a session on DESKTOP-7Q4.
+await at('#/settings?tab=users')
+const shareButton = window.document.querySelector('button[title^="Change the SMB password"]')
+shareButton?.click()
+await new Promise((resolve) => setTimeout(resolve, 400))
+const shareText = window.document.body.textContent.replace(/\s+/g, ' ')
+const shareDialog = {
+  opened: Boolean(shareButton),
+  namesTheClient: shareText.includes('DESKTOP-7Q4'),
+  claimsConnected: /is connected/.test(shareText),
+}
 await at('#/')
 
 // The way out lives in the shell. jsdom's fixture forwards no identity, so this
@@ -143,6 +189,8 @@ const summary = {
     usersOwnSpacePrompt:
       usersText.includes('space yet') || usersText.includes('not shared yet'),
     aboutShowsBuild: aboutText.includes(version),
+    settingsTabs,
+    shareDialog,
   },
   headings: [...window.document.querySelectorAll('h1, h2')].map((node) => node.textContent.trim()).slice(0, 8),
   errors: errors.slice(0, 3),
@@ -161,5 +209,9 @@ const broken =
   !summary.routes.servicesShowNginx ||
   !summary.routes.generalShowsRuntime ||
   !summary.routes.aboutShowsBuild ||
-  !summary.signOutOffered
+  !summary.signOutOffered ||
+  // A Settings tab that crashed, or one that rendered nothing worth reading.
+  Object.values(summary.routes.settingsTabs).some((tab) => tab.crashed || tab.chars < 200) ||
+  !summary.routes.shareDialog.namesTheClient ||
+  !summary.routes.shareDialog.claimsConnected
 process.exit(broken ? 1 : 0)
