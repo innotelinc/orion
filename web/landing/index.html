@@ -110,6 +110,27 @@
       text-overflow: ellipsis;
     }
 
+    /* Shown once the API names the account; until then the bar has no avatar
+       and the pill says "Sign-in required". */
+    .avatar {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      border: 1px solid rgba(255, 255, 255, .16);
+      background: linear-gradient(135deg, #0a63ff, #7c5cff);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: .02em;
+    }
+
+    /* The class rule above would otherwise beat the UA's [hidden] display. */
+    .avatar[hidden] { display: none; }
+
     .pill--identity[data-signed-in] {
       color: var(--ink);
       border-color: rgba(10, 99, 255, .55);
@@ -299,6 +320,7 @@
         <div class="bar__tag">nas.innotel.us</div>
       </div>
       <span class="bar__spacer"></span>
+      <span class="avatar" id="session-avatar" aria-hidden="true" hidden></span>
       <span class="pill pill--identity" id="session-pill">Sign-in required</span>
       <a
         class="pill"
@@ -387,11 +409,12 @@
         serves besides the bundle.
       </p>
       <dl class="facts">
-        <div><dt>Address</dt><dd><code>nas.innotel.us</code></dd></div>
+        <div><dt>Address</dt><dd><code id="fact-address">nas.innotel.us</code></dd></div>
         <div><dt>Desktop</dt><dd><a href="/app/">/app/</a></dd></div>
-        <div><dt>Data</dt><dd><code>/srv/storage</code> · 80 GB volume</dd></div>
+        <div><dt>Data</dt><dd><code id="fact-data">/srv/storage</code></dd></div>
         <div><dt>API</dt><dd><code>orion-api.service</code> · 127.0.0.1:8099</dd></div>
-        <div><dt>Runtime</dt><dd>Incus container, nginx 1.24</dd></div>
+        <div><dt>Runtime</dt><dd id="fact-runtime">Incus container</dd></div>
+        <div><dt>Build</dt><dd id="fact-build">—</dd></div>
         <div><dt>Sign-in</dt><dd>oauth2-proxy in front of Authentik</dd></div>
         <div><dt>TLS</dt><dd>Let's Encrypt at the NPM edge, renewed by Cerulean</dd></div>
         <div><dt>Uploads</dt><dd>streamed to disk, 2 GB per file</dd></div>
@@ -405,20 +428,52 @@
   </div>
 
   <script>
-    // This page is a static file, so the only thing that knows who is signed in
-    // is the API the edge forwards identity headers to. Until it answers, the
-    // pill keeps saying "Sign-in required" rather than guessing.
+    // This page is a static file, so the only thing it can ask is the API the
+    // edge forwards identity headers to. Every field below keeps its written-in
+    // text unless that call answers, so a container without an API still renders.
+    const fill = (id, value) => {
+      if (!value) return
+      const node = document.getElementById(id)
+      if (node) node.textContent = value
+    }
+
+    const initials = (identity) => {
+      const source = (identity.name || String(identity.email || '').split('@')[0]).trim()
+      const words = source.split(/[\s._-]+/).filter(Boolean).slice(0, 2)
+      return (words.map((word) => word[0]).join('') || '?').toUpperCase()
+    }
+
     fetch('/api/system', { credentials: 'same-origin' })
       .then((response) => (response.ok ? response.json() : null))
       .then((system) => {
-        const identity = system && system.identity
+        if (!system) return
+
+        // The machine, as it reports itself: no address, root, runtime or build
+        // is written into this file.
+        fill('fact-address', location.host)
+        fill('fact-data', system.storageRoot)
+        fill('fact-runtime', system.runtime)
+        if (system.version && system.version.version) {
+          fill('fact-build', system.version.version + ' \u00b7 ' + (system.version.build || 'dev'))
+        }
+
+        const identity = system.identity
         if (!identity || !identity.email) return
+
         const pill = document.getElementById('session-pill')
-        if (!pill) return
-        pill.textContent = identity.email
-        pill.title = 'Signed in as ' + identity.email +
-          (identity.groups && identity.groups.length ? ' \u00b7 ' + identity.groups.join(', ') : '')
-        pill.setAttribute('data-signed-in', '')
+        if (pill) {
+          pill.textContent = identity.email
+          pill.title = 'Signed in as ' + identity.email +
+            (identity.groups && identity.groups.length ? ' \u00b7 ' + identity.groups.join(', ') : '')
+          pill.setAttribute('data-signed-in', '')
+        }
+
+        const avatar = document.getElementById('session-avatar')
+        if (avatar) {
+          avatar.textContent = initials(identity)
+          avatar.title = identity.email
+          avatar.hidden = false
+        }
       })
       .catch(() => {})
   </script>
