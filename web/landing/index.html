@@ -321,7 +321,7 @@
       </div>
       <span class="bar__spacer"></span>
       <span class="avatar" id="session-avatar" aria-hidden="true" hidden></span>
-      <span class="pill pill--identity" id="session-pill">Sign-in required</span>
+      <span class="pill pill--identity" id="session-pill">Checking session…</span>
       <a
         class="pill"
         href="/oauth2/sign_out?rd=https%3A%2F%2Fauth.cerulean.innotel.us%2Fapplication%2Fo%2Forion%2Fend-session%2F"
@@ -458,17 +458,26 @@
         }
 
         const identity = system.identity
-        if (!identity || !identity.email) return
-
         const pill = document.getElementById('session-pill')
+        const avatar = document.getElementById('session-avatar')
+
+        if (!identity || !identity.email) {
+          // The API answered and nobody is signed in; say so rather than
+          // leaving the page claiming it is still checking.
+          if (pill) pill.textContent = 'Sign-in required'
+          return
+        }
+
+        // The edge forwards an account name, not a display name, so the API
+        // titles it; fall back to the handle and only then to the address.
+        const label = identity.name || identity.username || identity.email.split('@')[0]
         if (pill) {
-          pill.textContent = identity.email
+          pill.textContent = label
           pill.title = 'Signed in as ' + identity.email +
             (identity.groups && identity.groups.length ? ' \u00b7 ' + identity.groups.join(', ') : '')
           pill.setAttribute('data-signed-in', '')
         }
 
-        const avatar = document.getElementById('session-avatar')
         if (avatar) {
           avatar.textContent = initials(identity)
           avatar.title = identity.email

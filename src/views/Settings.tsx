@@ -630,8 +630,8 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
               </SectionCard>
 
               <SectionCard
-                title="Host accounts"
-                description="Unix accounts with a login shell, plus the identity the edge forwarded for this session. These are facts about the container; they change with usermod, not from here."
+                title="Accounts"
+                description="Everyone this app knows: the sign-in the edge forwarded for this session, and the spaces an admin issued. The container's own Unix accounts are plumbing and are not listed here."
                 footer={
                   <>
                     <span className="settings-dirty">{users.length} accounts</span>
@@ -661,7 +661,11 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                     </li>
                   ))}
                 </ul>
-                {users.length === 0 ? <p className="dim">No login accounts were found.</p> : null}
+                {users.length === 0 ? (
+                  <p className="dim">
+                    Nobody yet. Sign in at the edge, or add a space above to issue an account.
+                  </p>
+                ) : null}
               </SectionCard>
 
               <SectionCard

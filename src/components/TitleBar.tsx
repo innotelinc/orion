@@ -156,6 +156,12 @@ export function TitleBar({ resolvedTheme, onToggleTheme, onOpenPalette, navigate
   // No identity means no session at the edge. Falling back to users[0] would
   // make the desktop claim whoever sorts first — on this host, root.
   const currentUser = users.find((user) => user.isCurrent) ?? null
+  const signedInAs =
+    currentUser?.name ??
+    system?.identity?.name ??
+    system?.identity?.username ??
+    system?.identity?.email ??
+    null
   const address = system?.network.ip || 'no address'
 
   return (
@@ -232,11 +238,11 @@ export function TitleBar({ resolvedTheme, onToggleTheme, onOpenPalette, navigate
           type="button"
           className="profile-button"
           onClick={() => navigate('settings', { tab: 'users' })}
-          aria-label={currentUser ? 'Open account settings' : 'No edge session'}
-          title={currentUser?.name ?? 'No edge session'}
+          aria-label={signedInAs ? `Open account settings for ${signedInAs}` : 'No edge session'}
+          title={signedInAs ?? 'No edge session'}
         >
           <Avatar
-            name={currentUser?.name ?? '?'}
+            name={signedInAs ?? '?'}
             color={currentUser?.color ?? '#64748b'}
             size="sm"
           />
