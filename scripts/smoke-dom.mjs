@@ -14,17 +14,23 @@ import { fileURLToPath } from 'node:url'
 import { JSDOM, VirtualConsole } from 'jsdom'
 
 const dist = fileURLToPath(new URL('../dist/', import.meta.url))
+// Payloads come from the live container when `incus` can reach it, or from a
+// directory of saved JSON (`ORION_SMOKE_FIXTURES=path/to/dir`, with
+// system.json / state.json / metrics.json) on a machine that has no incus.
+const fixtureDir = process.env.ORION_SMOKE_FIXTURES
 const fixtures = {}
-for (const [route, path] of [
+for (const [name, path] of [
   ['system', '/api/system'],
   ['state', '/api/state'],
   ['metrics', '/api/metrics'],
 ]) {
-  fixtures[path] = execFileSync(
-    'incus',
-    ['exec', 'i1move:nas', '--', 'curl', '-s', `http://127.0.0.1:8099${path}`],
-    { encoding: 'utf8', timeout: 20_000 },
-  )
+  fixtures[path] = fixtureDir
+    ? await readFile(join(fixtureDir, `${name}.json`), 'utf8')
+    : execFileSync(
+        'incus',
+        ['exec', 'i1move:nas', '--', 'curl', '-s', `http://127.0.0.1:8099${path}`],
+        { encoding: 'utf8', timeout: 20_000 },
+      )
 }
 
 const types = { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml' }
@@ -134,6 +140,8 @@ const summary = {
     storageShowsDevices: storageText.includes('Devices'),
     generalShowsRuntime: generalText.includes('Incus'),
     usersShowsRoot: usersText.includes('root'),
+    usersOwnSpacePrompt:
+      usersText.includes('space yet') || usersText.includes('not shared yet'),
     aboutShowsBuild: aboutText.includes(version),
   },
   headings: [...window.document.querySelectorAll('h1, h2')].map((node) => node.textContent.trim()).slice(0, 8),

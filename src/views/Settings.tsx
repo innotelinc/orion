@@ -162,6 +162,9 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
   const [passwordValue, setPasswordValue] = useState('')
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const smbApp = apps.find((app) => app.id === 'smb')
+  // Declared before the rows below read it: a const used inside a callback
+  // further up the body is a temporal-dead-zone crash at render, not a type error.
+  const identity = system?.identity
   // The signed-in person's own space, matched the way the API matches it: by
   // the address the proxy forwarded, then by their account name.
   const mySpace =
@@ -302,7 +305,6 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
   }
   const version = system?.version
   const network = system?.network
-  const identity = system?.identity
   const running = services.filter((service) => service.running).length
 
   return (
