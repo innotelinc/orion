@@ -1,11 +1,27 @@
 # Orion
 
+[![CI](https://github.com/innotelinc/orion/actions/workflows/ci.yml/badge.svg)](https://github.com/innotelinc/orion/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+
 A NAS desktop for one Incus container: the files on its data volume, its
 filesystems, the host's devices and the systemd units that serve it — read and
 written through a small API, not invented in the browser.
 
 The design is reconstructed from the ZimaOS web UI captured over the Chrome
 DevTools Protocol at `127.0.0.1:9222`; the data is this machine's.
+
+## Why Orion
+
+| Problem | Answer |
+| --- | --- |
+| NAS interfaces invent a filesystem. | Every file action is a real call on /srv/storage, and every service is a real systemd unit. |
+| App stores claim an app is installed. | dpkg decides whether it is present and systemd decides whether it answers. |
+| Sharing means a second account system. | SMB accounts are the spaces; Orion never stores the password. |
+
+Its place in the stack is [docs/stack.md](docs/stack.md); the canonical
+definition of the shared layers is the
+[Innotel Platform Stack](https://github.com/innotelinc/innotel-platform-stack).
 
 ## What's here
 
@@ -654,3 +670,8 @@ src/
 deploy/          systemd unit, vhost, SSO provisioning
 web/landing/     the landing page at /
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE). Copyright © 2026 Innotel Inc. Upstream material,
+where a directory carries its own licence, remains under that licence.

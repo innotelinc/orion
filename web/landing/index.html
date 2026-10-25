@@ -3,488 +3,73 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Orion NAS — Home Cloud Desktop</title>
-  <meta name="description" content="Orion NAS is a home-cloud desktop for your own hardware: files, apps, storage pools and system settings in one browser workspace, served by nginx behind the Innotel edge.">
-  <meta name="theme-color" content="#07080c">
-  <link rel="canonical" href="https://nas.innotel.us/">
+  <title>Orion — StorageOps</title>
+  <meta name="description" content="A NAS desktop for one Incus container, wired to the machine it runs on.">
+  <meta property="og:title" content="Orion — StorageOps">
+  <meta property="og:description" content="A NAS desktop for one Incus container, wired to the machine it runs on.">
   <meta property="og:type" content="website">
-  <meta property="og:site_name" content="Orion NAS">
-  <meta property="og:title" content="Orion NAS — Home Cloud Desktop">
-  <meta property="og:description" content="Files, apps, storage and system settings for your own hardware, in one browser workspace.">
-  <meta property="og:url" content="https://nas.innotel.us/">
-  <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="Orion NAS — Home Cloud Desktop">
-  <meta name="twitter:description" content="Files, apps, storage and system settings for your own hardware, in one browser workspace.">
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0d10'/%3E%3Ctext x='32' y='44' font-size='32' text-anchor='middle' fill='%2338bdf8'%3EO%3C/text%3E%3C/svg%3E">
   <style>
-    :root {
-      --bg: #07080c;
-      --bg-soft: #0d0f16;
-      --surface: rgba(53, 54, 58, .4);
-      --line: rgba(255, 255, 255, .09);
-      --ink: #f2f4f8;
-      --ink-soft: #b7bcc9;
-      --ink-faint: #7d8494;
-      --accent: #0a63ff;
-      --radius: 18px;
-      --ease: cubic-bezier(.2, .8, .2, 1);
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      background:
-        radial-gradient(1100px 600px at 18% -10%, rgba(10, 99, 255, .22), transparent 60%),
-        radial-gradient(900px 520px at 92% 4%, rgba(124, 92, 255, .16), transparent 62%),
-        var(--bg);
-      color: var(--ink);
-      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-      font-size: 16px;
-      line-height: 1.6;
-      -webkit-font-smoothing: antialiased;
-    }
-
-    a { color: inherit; }
-
-    .wrap {
-      max-width: 1080px;
-      margin: 0 auto;
-      padding: 28px 24px 72px;
-    }
-
-    header.bar {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 10px 14px;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      background: var(--surface);
-      backdrop-filter: blur(14px);
-    }
-
-    .mark {
-      display: grid;
-      place-items: center;
-      width: 34px;
-      height: 34px;
-      border-radius: 10px;
-      background: linear-gradient(160deg, #1b6bff, #0a3ec2);
-      color: #fff;
-      flex: 0 0 auto;
-    }
-
-    .mark svg { width: 20px; height: 20px; }
-
-    .bar__name { font-weight: 650; letter-spacing: -.01em; }
-    .bar__tag { color: var(--ink-faint); font-size: 13px; }
-    .bar__spacer { flex: 1; }
-
-    .pill {
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 4px 10px;
-      font-size: 12px;
-      color: var(--ink-soft);
-      white-space: nowrap;
-    }
-
-    /* The bar's status pill doubles as the way out of the session, so signing
-       out does not require opening the desktop first. */
-    a.pill {
-      text-decoration: none;
-      transition: color .15s ease, border-color .15s ease;
-    }
-
-    a.pill:hover, a.pill:focus-visible {
-      color: var(--ink);
-      border-color: var(--ink-faint);
-    }
-
-    /* Filled in by the script at the end of the page: the address the proxy
-       forwarded, or the static label if nothing answers. */
-    .pill--identity {
-      max-width: 46vw;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    /* Shown once the API names the account; until then the bar has no avatar
-       and the pill says "Sign-in required". */
-    .avatar {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      flex: none;
-      width: 26px;
-      height: 26px;
-      border-radius: 50%;
-      border: 1px solid rgba(255, 255, 255, .16);
-      background: linear-gradient(135deg, #0a63ff, #7c5cff);
-      color: #fff;
-      font-size: 11px;
-      font-weight: 650;
-      letter-spacing: .02em;
-    }
-
-    /* The class rule above would otherwise beat the UA's [hidden] display. */
-    .avatar[hidden] { display: none; }
-
-    .pill--identity[data-signed-in] {
-      color: var(--ink);
-      border-color: rgba(10, 99, 255, .55);
-    }
-
-    .hero {
-      display: grid;
-      grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr);
-      gap: 44px;
-      align-items: center;
-      padding: 64px 0 48px;
-    }
-
-    h1 {
-      margin: 14px 0 0;
-      font-size: clamp(34px, 5vw, 54px);
-      line-height: 1.06;
-      letter-spacing: -.03em;
-      font-weight: 680;
-    }
-
-    .lede {
-      margin: 18px 0 0;
-      color: var(--ink-soft);
-      font-size: 18px;
-      max-width: 46ch;
-    }
-
-    .eyebrow {
-      margin: 0;
-      text-transform: uppercase;
-      letter-spacing: .16em;
-      font-size: 11px;
-      font-weight: 650;
-      color: #6f9bff;
-    }
-
-    .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
-
-    .button {
-      display: inline-flex;
-      align-items: center;
-      gap: 9px;
-      padding: 12px 20px;
-      border-radius: 12px;
-      border: 1px solid var(--line);
-      background: transparent;
-      color: var(--ink);
-      font: inherit;
-      font-weight: 600;
-      text-decoration: none;
-      transition: transform .18s var(--ease), background .18s var(--ease), border-color .18s var(--ease);
-    }
-
-    .button:hover { transform: translateY(-1px); border-color: rgba(255, 255, 255, .22); }
-
-    .button--primary {
-      background: linear-gradient(180deg, #1c72ff, #0a55e6);
-      border-color: transparent;
-      box-shadow: 0 12px 30px -12px rgba(10, 99, 255, .9);
-    }
-
-    .button--primary:hover { background: linear-gradient(180deg, #2b7dff, #0f5cf0); }
-
-    /* Miniature of the desktop so the landing is not just text. */
-    .preview {
-      border: 1px solid var(--line);
-      border-radius: 20px;
-      background: linear-gradient(180deg, rgba(19, 22, 32, .95), rgba(9, 11, 18, .95));
-      box-shadow: 0 40px 80px -50px rgba(0, 0, 0, .95);
-      padding: 14px;
-    }
-
-    .preview__bar {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      padding: 4px 6px 12px;
-      color: var(--ink-faint);
-      font-size: 12px;
-    }
-
-    .dot { width: 9px; height: 9px; border-radius: 50%; background: rgba(255, 255, 255, .16); }
-    .dot--live { background: #10b981; }
-
-    .preview__grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 10px;
-    }
-
-    .tile {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: var(--surface);
-      padding: 14px 12px;
-      font-size: 12.5px;
-      color: var(--ink-soft);
-      min-height: 74px;
-    }
-
-    .tile strong { display: block; color: var(--ink); font-size: 13px; margin-bottom: 3px; }
-
-    section { padding: 40px 0; border-top: 1px solid var(--line); }
-
-    h2 {
-      margin: 0 0 6px;
-      font-size: clamp(22px, 2.6vw, 28px);
-      letter-spacing: -.02em;
-      font-weight: 650;
-    }
-
-    .section__lede { margin: 0 0 26px; color: var(--ink-faint); max-width: 62ch; }
-
-    .cards {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 14px;
-    }
-
-    .card {
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      background: var(--surface);
-      padding: 20px;
-    }
-
-    .card h3 { margin: 0 0 6px; font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
-    .card p { margin: 0; color: var(--ink-soft); font-size: 14px; }
-
-    dl.facts {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-      gap: 12px 28px;
-      margin: 0;
-    }
-
-    dl.facts > div {
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      padding: 12px 0;
-      border-bottom: 1px solid var(--line);
-      font-size: 14px;
-    }
-
-    dt { color: var(--ink-faint); }
-    dd { margin: 0; color: var(--ink); text-align: right; }
-
-    code {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 13px;
-      background: rgba(255, 255, 255, .06);
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      padding: 1px 6px;
-    }
-
-    footer {
-      border-top: 1px solid var(--line);
-      padding-top: 22px;
-      color: var(--ink-faint);
-      font-size: 13px;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px 20px;
-      justify-content: space-between;
-    }
-
-    @media (max-width: 820px) {
-      .hero { grid-template-columns: 1fr; padding: 40px 0 28px; gap: 28px; }
-    }
+    :root { color-scheme: dark; --bg:#0b0d10; --panel:#12151a; --line:#262c35; --text:#f4f7fb; --muted:#a8b2bf; --accent:#38bdf8; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif; line-height:1.6; }
+    a { color:var(--accent); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    .wrap { max-width:960px; margin:0 auto; padding:0 24px; }
+    header { display:flex; align-items:center; gap:12px; height:64px; border-bottom:1px solid var(--line); }
+    .mark { display:grid; place-items:center; width:30px; height:30px; border:1px solid var(--line); border-radius:9px; font-weight:700; color:var(--accent); }
+    nav { margin-left:auto; display:flex; gap:16px; font-size:14px; }
+    main { padding:80px 0 56px; }
+    .kicker { color:var(--accent); text-transform:uppercase; letter-spacing:.08em; font-size:12px; }
+    h1 { font-size:clamp(2rem,5vw,3.2rem); line-height:1.1; margin:10px 0 18px; letter-spacing:-.02em; }
+    h1 span { color:var(--accent); }
+    .lede { font-size:1.1rem; color:var(--muted); max-width:640px; margin:0 0 28px; }
+    .cta { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:34px; }
+    .btn { border:1px solid var(--line); border-radius:9px; padding:10px 18px; color:var(--text); font-size:14px; }
+    .btn.primary { background:var(--accent); border-color:var(--accent); color:#0a0e13; font-weight:600; }
+    pre { background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:14px 16px; overflow-x:auto; font:13px/1.5 "JetBrains Mono",ui-monospace,monospace; color:var(--muted); }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; margin:44px 0 8px; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px; }
+    .card h3 { margin:0 0 6px; font-size:1rem; }
+    .card p { margin:0; color:var(--muted); font-size:14px; }
+    footer { border-top:1px solid var(--line); margin-top:48px; padding:22px 0; color:var(--muted); font-size:13px; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <header class="bar">
-      <span class="mark" aria-hidden="true">
-        <svg viewBox="0 0 40 40" fill="none">
-          <path d="M10.6 27.4c-2.8 0-5.1-2.2-5.1-4.9 0-2.6 2-4.7 4.6-4.9 1-4.1 4.4-7 8.4-7 4.1 0 7.6 2.8 8.3 6.5 2.6.2 4.6 2.3 4.6 4.9 0 2.7-2.3 4.9-5.1 4.9H10.6Z" fill="currentColor"/>
-          <circle cx="16" cy="21.6" r="1.6" fill="#0a3ec2"/>
-          <circle cx="24" cy="21.6" r="1.6" fill="#0a3ec2"/>
-        </svg>
-      </span>
-      <div>
-        <div class="bar__name">Orion NAS</div>
-        <div class="bar__tag">nas.innotel.us</div>
-      </div>
-      <span class="bar__spacer"></span>
-      <span class="avatar" id="session-avatar" aria-hidden="true" hidden></span>
-      <span class="pill pill--identity" id="session-pill">Checking session…</span>
-      <a
-        class="pill"
-        href="/oauth2/sign_out?rd=https%3A%2F%2Fauth.cerulean.innotel.us%2Fapplication%2Fo%2Forion%2Fend-session%2F"
-        title="Ends the edge proxy's cookie and your Authentik session"
-      >Sign out</a>
+    <header>
+      <span class="mark">O</span>
+      <strong>Orion</strong>
+      <nav>
+        <a href="https://github.com/innotelinc/orion">GitHub</a>
+        <a href="https://github.com/innotelinc/orion#readme">Docs</a>
+      </nav>
     </header>
-
-    <div class="hero">
-      <div>
-        <p class="eyebrow">Home cloud desktop</p>
-        <h1>Your own hardware, in a browser workspace.</h1>
-        <p class="lede">
-          Orion is the desktop for this container: the files on <code>/srv/storage</code>,
-          its filesystems, the host's devices and the systemd units that serve it — read
-          live from the machine, with nothing stored in the browser except theme.
-        </p>
-        <div class="actions">
-          <a class="button button--primary" href="/app/">
-            Open the desktop
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M5 12h14M13 6l6 6-6 6"/>
-            </svg>
-          </a>
-          <a class="button" href="#details">What's inside</a>
-        </div>
+    <main>
+      <p class="kicker">StorageOps · self-hosted</p>
+      <h1>Orion — <span>A NAS desktop for one Incus container, wired to the machine it runs on.</span></h1>
+      <p class="lede">A NAS desktop for a single Incus container: the files on its data volume, its filesystems, the host's devices and the systemd units that serve it, read and written through a small API rather than invented in the browser. Files, spaces, SMB shares and installable apps are the machine's own.</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/innotelinc/orion">View on GitHub</a>
+        <a class="btn" href="https://github.com/innotelinc/orion/blob/main/README.md">Quick start</a>
       </div>
-
-      <div class="preview" aria-hidden="true">
-        <div class="preview__bar">
-          <span class="dot dot--live"></span>
-          <span class="dot"></span>
-          <span class="dot"></span>
-          <span style="margin-left:auto">orion · desktop</span>
-        </div>
-        <div class="preview__grid">
-          <div class="tile"><strong>Files</strong>The real volume</div>
-          <div class="tile"><strong>Services</strong>systemd, live</div>
-          <div class="tile"><strong>Storage</strong>Mounts and devices</div>
-          <div class="tile"><strong>Dashboard</strong>/proc telemetry</div>
-          <div class="tile"><strong>Settings</strong>Facts and prefs</div>
-          <div class="tile"><strong>⌘K</strong>Jump anywhere</div>
-        </div>
+      <pre><code>npm install</code></pre>
+      <div class="grid">
+      <article class="card">
+        <h3>NAS interfaces invent a filesystem.</h3>
+        <p>Every file action is a real call on /srv/storage, and every service is a real systemd unit.</p>
+      </article>
+      <article class="card">
+        <h3>App stores claim an app is installed.</h3>
+        <p>dpkg decides whether it is present and systemd decides whether it answers.</p>
+      </article>
+      <article class="card">
+        <h3>Sharing means a second account system.</h3>
+        <p>SMB accounts are the spaces; Orion never stores the password.</p>
+      </article>
       </div>
-    </div>
-
-    <section id="details">
-      <h2>What the desktop does</h2>
-      <p class="section__lede">
-        Five workspaces behind one title bar, each reading or writing the machine
-        through <code>orion-api</code>.
-      </p>
-      <div class="cards">
-        <div class="card">
-          <h3>Files</h3>
-          <p>Creates folders, writes uploads and renames or trashes entries on <code>/srv/storage</code>. Deletes move to <code>.orion/trash</code>, and images preview from the same byte stream you would download.</p>
-        </div>
-        <div class="card">
-          <h3>Services</h3>
-          <p>The container's systemd units with their real state. Start, stop and restart call <code>systemctl</code> — including for nginx and the API themselves.</p>
-        </div>
-        <div class="card">
-          <h3>Storage</h3>
-          <p>Every mounted filesystem with live capacity from <code>statvfs</code>, and the block devices exposed through <code>/sys/block</code>. No pool wizard, because a container cannot format host disks.</p>
-        </div>
-        <div class="card">
-          <h3>Settings</h3>
-          <p>Kernel, runtime, CPU, memory and network facts read from <code>/proc</code> and <code>resolvectl</code>; only theme, accent and density are stored, and only in this browser.</p>
-        </div>
-        <div class="card">
-          <h3>Command palette</h3>
-          <p><code>⌘K</code> or <code>Ctrl+K</code> from anywhere to jump to a view, a file, a service or an action without leaving the keyboard.</p>
-        </div>
-        <div class="card">
-          <h3>Live telemetry</h3>
-          <p>CPU, memory and interface rates sampled every two seconds on the host, so the charts show the machine rather than a random walk.</p>
-        </div>
-      </div>
-    </section>
-
-    <section id="status">
-      <h2>This deployment</h2>
-      <p class="section__lede">
-        A live deployment. The desktop writes the data volume and controls this
-        container's services; the landing page and API are the only two things it
-        serves besides the bundle.
-      </p>
-      <dl class="facts">
-        <div><dt>Address</dt><dd><code id="fact-address">nas.innotel.us</code></dd></div>
-        <div><dt>Desktop</dt><dd><a href="/app/">/app/</a></dd></div>
-        <div><dt>Data</dt><dd><code id="fact-data">/srv/storage</code></dd></div>
-        <div><dt>API</dt><dd><code>orion-api.service</code> · 127.0.0.1:8099</dd></div>
-        <div><dt>Runtime</dt><dd id="fact-runtime">Incus container</dd></div>
-        <div><dt>Build</dt><dd id="fact-build">—</dd></div>
-        <div><dt>Sign-in</dt><dd>oauth2-proxy in front of Authentik</dd></div>
-        <div><dt>TLS</dt><dd>Let's Encrypt at the NPM edge, renewed by Cerulean</dd></div>
-        <div><dt>Uploads</dt><dd>streamed to disk, 2 GB per file</dd></div>
-      </dl>
-    </section>
-
-    <footer>
-      <span>Orion NAS · Innotel estate</span>
-      <span><a href="/app/">Open the desktop</a> · <a href="/health">Health</a></span>
-    </footer>
+    </main>
+    <footer>Part of the <a href="https://github.com/innotelinc/innotel-platform-stack">Innotel Platform Stack</a>. © 2026 Innotel Inc.</footer>
   </div>
-
-  <script>
-    // This page is a static file, so the only thing it can ask is the API the
-    // edge forwards identity headers to. Every field below keeps its written-in
-    // text unless that call answers, so a container without an API still renders.
-    const fill = (id, value) => {
-      if (!value) return
-      const node = document.getElementById(id)
-      if (node) node.textContent = value
-    }
-
-    const initials = (identity) => {
-      const source = (identity.name || String(identity.email || '').split('@')[0]).trim()
-      const words = source.split(/[\s._-]+/).filter(Boolean).slice(0, 2)
-      return (words.map((word) => word[0]).join('') || '?').toUpperCase()
-    }
-
-    fetch('/api/system', { credentials: 'same-origin' })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((system) => {
-        if (!system) return
-
-        // The machine, as it reports itself: no address, root, runtime or build
-        // is written into this file.
-        fill('fact-address', location.host)
-        fill('fact-data', system.storageRoot)
-        fill('fact-runtime', system.runtime)
-        if (system.version && system.version.version) {
-          fill('fact-build', system.version.version + ' \u00b7 ' + (system.version.build || 'dev'))
-        }
-
-        const identity = system.identity
-        const pill = document.getElementById('session-pill')
-        const avatar = document.getElementById('session-avatar')
-
-        if (!identity || !identity.email) {
-          // The API answered and nobody is signed in; say so rather than
-          // leaving the page claiming it is still checking.
-          if (pill) pill.textContent = 'Sign-in required'
-          return
-        }
-
-        // The edge forwards an account name, not a display name, so the API
-        // titles it; fall back to the handle and only then to the address.
-        const label = identity.name || identity.username || identity.email.split('@')[0]
-        if (pill) {
-          pill.textContent = label
-          pill.title = 'Signed in as ' + identity.email +
-            (identity.groups && identity.groups.length ? ' \u00b7 ' + identity.groups.join(', ') : '')
-          pill.setAttribute('data-signed-in', '')
-        }
-
-        if (avatar) {
-          avatar.textContent = initials(identity)
-          avatar.title = identity.email
-          avatar.hidden = false
-        }
-      })
-      .catch(() => {})
-  </script>
 </body>
 </html>
