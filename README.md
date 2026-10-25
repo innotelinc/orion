@@ -506,6 +506,14 @@ opening the desktop. Both go to `/oauth2/sign_out` with Authentik's `end-session
 flow as the redirect: clearing only the proxy cookie signs the browser straight
 back in, because the provider still remembers it.
 
+`orion.locker` is the public front door, and it opens on `locker.html`: an access
+page with **Sign in** (`/oauth2/start?rd=/app/`) and **Get access**, which points
+at Magnate's signup for the `orion` plan. Buying that plan provisions the
+Authentik account and grants `orion-users` — the group this proxy lets in — so
+the purchase *is* the access grant, and a cancellation removes the group again.
+The desktop itself lives at `/app/` and stays blurred until a session exists;
+nothing about the machine reaches an anonymous caller.
+
 Three things about that chain fail quietly, so they are part of the deploy rather
 than something to rediscover:
 
@@ -670,7 +678,7 @@ src/
   hooks/         hash router, persistence, click-outside
   views/         Dashboard, Files, AppStore (apps and units), Storage, Settings
 deploy/          systemd unit, vhost, SSO provisioning
-web/landing/     the landing page at /
+web/landing/     the pages at / — StorageOps, and orion.locker's access page
 ```
 
 ## License

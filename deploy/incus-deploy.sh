@@ -23,6 +23,7 @@ LOCK=${ORION_DEPLOY_LOCK:-/run/orion-deploy.lock}
 LOG=${ORION_DEPLOY_LOG:-/var/log/orion-deploy.log}
 SITE=/var/www/orion
 LANDING=/var/www/orion-landing/index.html
+ACCESS=/var/www/orion-landing/locker.html
 API=/opt/orion/orion-api.py
 VERSION_FILE=/opt/orion/version.json
 VHOST=/etc/nginx/sites-enabled/orion.conf
@@ -94,6 +95,8 @@ fi
 mv "$SITE.new" "$SITE"
 
 install -m 0644 "$STAGE/web/landing/index.html" "$LANDING"
+# orion.locker's own front door: sign in, or get access through Magnate.
+install -m 0644 "$STAGE/web/landing/locker.html" "$ACCESS"
 install -m 0644 "$STAGE/server/orion-api.py" "$API"
 install -m 0644 "$STAGE/deploy/orion-api.service" "$UNIT"
 
