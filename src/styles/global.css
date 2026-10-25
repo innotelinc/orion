@@ -698,6 +698,85 @@ kbd {
   animation: view-in 420ms var(--ease);
 }
 
+/* Signed out: the frame is public, the machine behind it is not. The shell
+   stays on screen under a blur and cannot be clicked or read. */
+.shell--locked .rail,
+.shell--locked .main {
+  filter: blur(10px) saturate(0.5);
+  opacity: 0.5;
+  pointer-events: none;
+  user-select: none;
+}
+
+.lock-layer {
+  position: fixed;
+  inset: var(--titlebar-h) 0 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(circle at 50% 30%, rgba(6, 8, 12, 0.12), rgba(6, 8, 12, 0.5));
+}
+
+.lock-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: min(430px, 100%);
+  padding: 30px 28px 28px;
+  border-radius: 18px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-strong);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+  text-align: center;
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+}
+
+.lock-card__icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--accent);
+}
+
+.lock-card strong {
+  font-size: 16px;
+  letter-spacing: -0.01em;
+}
+
+.lock-card p {
+  max-width: 36ch;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.lock-card__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  margin-top: 6px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: #06070a;
+  font-size: 13px;
+  font-weight: 700;
+  transition: filter var(--transition);
+}
+
+.lock-card__button:hover {
+  filter: brightness(1.07);
+}
+
 @keyframes view-in {
   from {
     opacity: 0;

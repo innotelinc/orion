@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
+import { LogIn, Lock } from 'lucide-react'
 import { CommandPalette } from './components/CommandPalette'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { NavRail } from './components/NavRail'
 import { TitleBar } from './components/TitleBar'
 import { ToastRegion } from './components/ToastRegion'
 import { useApp } from './context/AppContext'
+import { classNames } from './lib/format'
+import { signIn } from './lib/session'
 import { useMediaQuery } from './hooks/usePersistentState'
 import { useRoute, type RouteName } from './hooks/useRoute'
 import { Dashboard } from './views/Dashboard'
@@ -22,7 +25,7 @@ const PAGE_TITLES: Record<RouteName, string> = {
 }
 
 export default function App() {
-  const { settings, updateSettings, error, refresh } = useApp()
+  const { settings, updateSettings, error, refresh, locked } = useApp()
   const { route, navigate } = useRoute()
   const [paletteOpen, setPaletteOpen] = useState(false)
   const systemDark = useMediaQuery('(prefers-color-scheme: dark)')
@@ -91,7 +94,7 @@ export default function App() {
         navigate={navigate}
       />
 
-      <div className="shell">
+      <div className={classNames('shell', locked && 'shell--locked')}>
         <NavRail route={route.name} navigate={navigate} />
         <main id="main-content" className="main" tabIndex={-1}>
           {error ? (
@@ -127,6 +130,27 @@ export default function App() {
           </ErrorBoundary>
         </main>
       </div>
+
+      {locked ? (
+        /* Signed out: the frame is public, the machine behind it is not. The
+           shell stays on screen under a blur, and this is the only way in. */
+        <div className="lock-layer">
+          <div className="lock-card" role="dialog" aria-labelledby="lock-title">
+            <span className="lock-card__icon" aria-hidden="true">
+              <Lock size={20} />
+            </span>
+            <strong id="lock-title">Sign in to open the desktop</strong>
+            <p>
+              orion.locker is public; the files, shares and services behind it are not.
+              Sign in with your Authentik account.
+            </p>
+            <button type="button" className="lock-card__button" onClick={signIn}>
+              <LogIn size={16} aria-hidden="true" />
+              <span>Sign in</span>
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <CommandPalette
         open={paletteOpen}

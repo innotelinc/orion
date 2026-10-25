@@ -10,7 +10,7 @@ import {
 } from 'react'
 import { DEFAULT_SETTINGS } from '../data/system'
 import { joinPath } from '../data/files'
-import { api, type StatePayload } from '../lib/api'
+import { api, ApiError, type StatePayload } from '../lib/api'
 import { usePersistentState } from '../hooks/usePersistentState'
 import type {
   AppEntry,
@@ -77,6 +77,8 @@ interface AppContextValue {
   notifications: NotificationItem[]
   loading: boolean
   error: string | null
+  /** No edge session: the desktop is shown blurred until the person signs in. */
+  locked: boolean
   refresh: () => Promise<void>
   addFolder: (parent: string, name: string) => Promise<ActionResult>
   addUploads: (parent: string, uploads: File[]) => Promise<number>
@@ -166,6 +168,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [locked, setLocked] = useState(false)
+  // The polls read this ref so a locked desktop stops asking for data without
+  // rebuilding the timers on every state change.
+  const lockedRef = useRef(false)
   const [dismissed, setDismissed] = useState<Set<string>>(new Set())
   const [read, setRead] = useState<Set<string>>(new Set())
   const [toasts, setToasts] = useState<Toast[]>([])
@@ -221,6 +227,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const loadState = useCallback(async () => {
+    if (lockedRef.current) return
     const payload = await api.state()
     if (!mounted.current) return
     setState(payload)
@@ -236,7 +243,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setError(null)
     } catch (failure) {
       if (!mounted.current) return
-      setError(failure instanceof Error ? failure.message : 'The API is unreachable.')
+      // 401 is the edge saying "no session", not the host being broken: the
+      // shell stays up behind a blur and the top bar offers Sign in.
+      if (failure instanceof ApiError && failure.status === 401) {
+        lockedRef.current = true
+        setLocked(true)
+        setError(null)
+      } else {
+        setError(failure instanceof Error ? failure.message : 'The API is unreachable.')
+      }
     } finally {
       if (mounted.current) setLoading(false)
     }
@@ -249,7 +264,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       loadState().catch(() => undefined)
     }, 20_000)
     const metricsTimer = window.setInterval(() => {
-      if (document.visibilityState === 'hidden') return
+      if (document.visibilityState === 'hidden' || lockedRef.current) return
       api
         .metrics()
         .then((next) => {
@@ -258,6 +273,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         .catch(() => undefined)
     }, 3000)
     const firstMetrics = window.setTimeout(() => {
+      if (lockedRef.current) return
       api
         .metrics()
         .then((next) => {
@@ -794,6 +810,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       notifications,
       loading,
       error,
+      locked,
       refresh,
       addFolder,
       addUploads,
@@ -835,6 +852,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       notifications,
       loading,
       error,
+      locked,
       refresh,
       addFolder,
       addUploads,

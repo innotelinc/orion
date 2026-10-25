@@ -51,6 +51,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError('The API is unreachable. Check orion-api on the host.', 0)
   }
   if (!response.ok) {
+    // The edge answers 401 for every /api/ path without a session. That is not
+    // a failure to report — it is the desktop asking to be signed in to.
+    if (response.status === 401) {
+      throw new ApiError('Sign in to make changes.', 401)
+    }
     let message = `Request failed (${response.status})`
     try {
       const payload = (await response.json()) as { error?: string }
@@ -105,6 +110,9 @@ export const api = {
       body: file,
     })
     if (!response.ok) {
+      if (response.status === 401) {
+        throw new ApiError('Sign in to make changes.', 401)
+      }
       let message = `Upload failed (${response.status})`
       try {
         const payload = (await response.json()) as { error?: string }
