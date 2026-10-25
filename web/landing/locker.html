@@ -60,7 +60,7 @@
       <p class="lede">Orion is a desktop for one server: the files on its data volume, its spaces and shares, the apps it has installed and the systemd units that serve them. Everything you see is read from the machine, and every change is written to it.</p>
       <div class="cta">
         <a class="btn primary" id="signin" href="/oauth2/start?rd=%2Fapp%2F">Sign in</a>
-        <a class="btn" href="https://app.magnate.innotel.us/signup?plan=orion">Get access — $10/month</a>
+        <a class="btn" id="access" href="https://app.magnate.innotel.us/signup?plan=orion">Get access — $10/month</a>
       </div>
       <p class="note">Accounts, billing and cancellation live in <a href="https://app.magnate.innotel.us">Magnate</a> — one account and one bill for every Innotel service. Buying Orion creates your account and grants the <code>orion-users</code> role, so the desktop opens the next time you sign in. Already subscribed? Sign in on the left; Authentik hands you straight to the desktop.</p>
       <div class="grid">
@@ -92,6 +92,27 @@
         button.setAttribute('href', '/app/');
       })
       .catch(function () {});
+
+    // The price is Magnate's, never this page's: the master dashboard is the one
+    // place a price is set, so the button reads what the plan actually costs and
+    // quotes it in the unit it is sold in. The static label above is the answer
+    // when the billing platform cannot be reached.
+    (function () {
+      var MAGNATE = 'https://app.magnate.innotel.us';
+      fetch(MAGNATE + '/api/plans?service=orion')
+        .then(function (r) { return r.ok ? r.json() : { plans: [] }; })
+        .then(function (d) {
+          var plan = (d && d.plans && d.plans[0]) || null;
+          if (!plan) return;
+          var button = document.getElementById('access');
+          var cents = plan.perUnit ? plan.pricePerUnitCents : plan.priceMonthlyCents;
+          var amount = cents % 100 === 0 ? String(cents / 100) : (cents / 100).toFixed(2);
+          var unit = plan.perUnit ? ' per ' + (plan.billingUnit || 'unit') : '/month';
+          button.textContent = 'Get access — $' + amount + unit;
+          button.setAttribute('href', MAGNATE + '/signup?plan=' + encodeURIComponent(plan.slug));
+        })
+        .catch(function () {});
+    })();
   </script>
 </body>
 </html>
