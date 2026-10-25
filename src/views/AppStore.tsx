@@ -60,8 +60,18 @@ export function AppStore({ navigate }: AppStoreProps) {
     () => apps.filter((app) => app.installed && matches(`${app.name} ${app.tagline}`)),
     [apps, needle],
   )
+  // NFS is not waiting to be installed: the host exports it. Keeping it in the
+  // Available list meant a card with no Install button under a heading that
+  // promises apt packages.
+  const hosted = useMemo(
+    () => apps.filter((app) => app.external && matches(`${app.name} ${app.tagline}`)),
+    [apps, needle],
+  )
   const available = useMemo(
-    () => apps.filter((app) => !app.installed && matches(`${app.name} ${app.tagline}`)),
+    () =>
+      apps.filter(
+        (app) => !app.installed && !app.external && matches(`${app.name} ${app.tagline}`),
+      ),
     [apps, needle],
   )
   const units = useMemo(
@@ -352,6 +362,18 @@ export function AppStore({ navigate }: AppStoreProps) {
       ) : (
         <div className="store-grid">{installed.map(appCard)}</div>
       )}
+
+      {hosted.length ? (
+        <>
+          <div className="store-results-head">
+            <div>
+              <h2>On the host</h2>
+              <span>Exported by the machine that owns the storage, not by this container</span>
+            </div>
+          </div>
+          <div className="store-grid">{hosted.map(appCard)}</div>
+        </>
+      ) : null}
 
       <div className="store-results-head">
         <div>

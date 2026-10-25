@@ -294,6 +294,11 @@ const nfsCard = [...window.document.querySelectorAll('.store-card')].find((card)
 )
 const appsCatalogue = {
   saysOnTheHost: Boolean(nfsCard) && nfsCard.textContent.includes('on the host'),
+  // A card with no Install button belongs under its own heading, not under
+  // "Available / packages this container can install with apt".
+  ownSection: [...window.document.querySelectorAll('.store-results-head h2')].some(
+    (heading) => heading.textContent.trim() === 'On the host',
+  ),
   notCalledUnavailable:
     Boolean(nfsCard) && !nfsCard.textContent.includes('unavailable'),
   noInstall: nfsCard
@@ -422,6 +427,7 @@ const broken =
   summary.routes.poolCards === 0 ||
   !summary.routes.servicesShowNginx ||
   !summary.routes.appsCatalogue.saysOnTheHost ||
+  !summary.routes.appsCatalogue.ownSection ||
   !summary.routes.appsCatalogue.notCalledUnavailable ||
   !summary.routes.appsCatalogue.noInstall ||
   !summary.routes.appsCatalogue.namesTheHost ||

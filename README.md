@@ -112,9 +112,12 @@ It runs as `orion-api.service` and is only reachable through nginx.
 name from the browser.
 
 Each entry also carries `available` and, when it is false, `unavailable`: the
-reason in a sentence, so a store card can say *cannot run here* before anybody
-presses install. **NFS server** is the entry that does: it names no package and
-no unit, and `install` is refused before anything runs as root.
+reason in a sentence, so a store card can say why before anybody presses install.
+An entry that can never run here is marked `external` instead: **NFS server** is
+the only one, it names no package and no unit, `install` is refused before
+anything runs as root, and the store files it under **On the host** rather than
+**Available** — a badge reading *on the host* and a state of *exported by the
+host*, because the export is not missing, it is one machine up.
 
 ## NFS
 
