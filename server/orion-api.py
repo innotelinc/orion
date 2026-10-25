@@ -111,20 +111,25 @@ APP_CATALOGUE: list[dict] = [
         # selling something that cannot work, so it says so instead.
         "id": "nfs",
         "name": "NFS server",
-        "tagline": "Exports run on the incus host, not in this container",
+        "tagline": "Served by the host that holds the storage",
         "description": (
-            "Kernel nfsd is a filesystem this container cannot mount, and nfs-ganesha, the "
-            "userspace server, needs open_by_handle_at — refused here, so every mount fails "
-            "with an I/O error. Linux and macOS mount the same shares over SMB; a native NFS "
-            "export has to run on the host that holds the storage."
+            "Nothing in this container can serve NFS: kernel nfsd is a filesystem it cannot "
+            "mount, and userspace nfs-ganesha needs open_by_handle_at, which the sandbox "
+            "refuses. The incus host that owns the dataset exports the same folders instead — "
+            "a Linux or macOS client mounts the host's path, and SMB is there for everyone else."
         ),
         "category": "Sharing",
         "packages": [],
         "unit": "",
+        # Not something this container installs, and not something it has failed to
+        # do either: the export exists, one machine up, and the card should say that
+        # rather than putting NFS in the same drawer as an app that will not run.
+        "external": True,
         "available": False,
         "unavailable": (
-            "No NFS server can run inside this container. Mount the SMB shares instead, or "
-            "export the storage from the incus host — README, NFS."
+            "Exports are defined on the host, in /etc/exports.d/orion.exports. Mount "
+            "<host>:/var/lib/incus/storage-pools/incus/custom/default_nas-data/Users/household "
+            "with -t nfs4; the full recipe is in the README under NFS on the host."
         ),
         "hint": "host export: /etc/exports.d/orion.exports",
     },
@@ -1570,10 +1575,16 @@ def app_facts(app: dict) -> dict:
     # report an empty list as installed.
     available = bool(app.get("available", True))
     unavailable = "" if available else str(app.get("unavailable", ""))
+    # An external service is not installed here and never will be; it runs on the
+    # host, and saying "not installed" would read as a failure.
+    external = bool(app.get("external", False))
     installed = bool(app["packages"]) and all(
         dpkg_installed(package) for package in app["packages"]
     )
-    active, state = unit_state(app["unit"]) if installed else (False, "not installed")
+    if external:
+        active, state = True, "exported by the host"
+    else:
+        active, state = unit_state(app["unit"]) if installed else (False, "not installed")
     return {
         "id": app["id"],
         "name": app["name"],
@@ -1586,6 +1597,7 @@ def app_facts(app: dict) -> dict:
         "active": active,
         "state": state,
         "available": available,
+        "external": external,
         "unavailable": unavailable,
         "hint": str(app.get("hint", "")),
     }

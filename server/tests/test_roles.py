@@ -1070,7 +1070,7 @@ class TrashTestCase(unittest.TestCase):
 
 
 class AppCatalogueTestCase(unittest.TestCase):
-    """NFS cannot run in this container, and the catalogue says so."""
+    """NFS cannot run in this container; the catalogue points at whoever can."""
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -1092,21 +1092,31 @@ class AppCatalogueTestCase(unittest.TestCase):
     def _nfs(self):
         return next(app for app in self.api.apps_facts() if app["id"] == "nfs")
 
-    def test_nfs_is_listed_as_unavailable_with_a_reason(self):
+    def test_nfs_is_listed_as_served_by_the_host(self):
         entry = self._nfs()
         self.assertFalse(entry["available"])
-        self.assertIn("container", entry["unavailable"])
-        self.assertIn("SMB", entry["unavailable"])
+        # Not "unavailable": the export exists, one machine up. The card said
+        # "not installed" and read as a fault rather than a hand-off.
+        self.assertTrue(entry["external"])
+        self.assertEqual(entry["state"], "exported by the host")
+        self.assertIn("host", entry["unavailable"])
+        self.assertIn("/etc/exports.d/orion.exports", entry["unavailable"])
         # Nothing is claimed as installed: an empty package list would make
         # dpkg_installed's "all of them are present" true by accident.
         self.assertFalse(entry["installed"])
         self.assertEqual(entry["packages"], [])
-        self.assertEqual(entry["state"], "not installed")
 
     def test_installing_nfs_is_refused_rather_than_attempted(self):
         with self.assertRaises(RuntimeError) as caught:
             self.api.install_app("nfs")
-        self.assertIn("No NFS server can run", str(caught.exception))
+        self.assertIn("/etc/exports.d/orion.exports", str(caught.exception))
+
+    def test_only_nfs_is_external(self):
+        # The flag exists so an entry can say "the host runs this". Handing it
+        # to SMB would stop the card reporting whether Samba is actually up.
+        self.assertEqual(
+            {app["id"] for app in self.api.apps_facts() if app["external"]}, {"nfs"}
+        )
 
     def test_the_refusal_happens_before_anything_runs_as_root(self):
         ran = []

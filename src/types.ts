@@ -148,6 +148,8 @@ export interface AppEntry {
   state: string
   /** False when this host cannot run the app at all, however cleanly it installs. */
   available?: boolean
+  /** True when the service is provided by the host that owns the storage, not this container. */
+  external?: boolean
   /** Why, in a sentence, when `available` is false. */
   unavailable?: string
   /** Where the thing actually runs, when this host cannot run it at all. */

@@ -415,6 +415,18 @@ html[data-theme='light'] .featured-card__label {
   line-height: 1.45;
   color: var(--text-muted);
 }
+/* A service that lives on the host is information, not a warning: the same box
+   as above without the amber, so it reads as guidance rather than a fault. */
+.store-card__note {
+  margin: 0;
+  padding: 7px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--card) 55%, transparent);
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
 .store-card__meta {
   display: flex;
   align-items: center;

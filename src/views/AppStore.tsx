@@ -128,7 +128,13 @@ export function AppStore({ navigate }: AppStoreProps) {
           <span>{app.tagline}</span>
         </div>
         {app.available === false ? (
-          <StatusBadge tone="warning">unavailable</StatusBadge>
+          // NFS is not down: it is exported by the host, which is where the
+          // storage is. Calling that "unavailable" was the misleading part.
+          app.external ? (
+            <StatusBadge tone="success">on the host</StatusBadge>
+          ) : (
+            <StatusBadge tone="warning">unavailable</StatusBadge>
+          )
         ) : app.installed ? (
           <StatusBadge tone={app.active ? 'success' : 'warning'}>{app.state}</StatusBadge>
         ) : (
@@ -137,7 +143,9 @@ export function AppStore({ navigate }: AppStoreProps) {
       </header>
       <p className="store-card__description">{app.description}</p>
       {app.available === false && app.unavailable ? (
-        <p className="store-card__unavailable">{app.unavailable}</p>
+        <p className={app.external ? 'store-card__note' : 'store-card__unavailable'}>
+          {app.unavailable}
+        </p>
       ) : null}
       {app.packages.length || app.unit ? (
         <div className="store-card__meta">
@@ -191,7 +199,7 @@ export function AppStore({ navigate }: AppStoreProps) {
             </>
           ) : app.available === false ? (
             <span className="store-category" title={app.unavailable}>
-              cannot run here
+              {app.external ? 'served by the host' : 'cannot run here'}
             </span>
           ) : (
             <button

@@ -137,16 +137,17 @@
     {
       "id": "nfs",
       "name": "NFS server",
-      "tagline": "Exports run on the incus host, not in this container",
-      "description": "Kernel nfsd needs a filesystem this container cannot mount.",
+      "tagline": "Served by the host that holds the storage",
+      "description": "The incus host that owns the dataset exports the same folders; Linux and macOS mount the host's path.",
       "category": "Sharing",
       "packages": [],
       "unit": "",
       "installed": false,
-      "active": false,
-      "state": "not installed",
+      "active": true,
+      "state": "exported by the host",
       "available": false,
-      "unavailable": "No NFS server can run inside this container. Mount the SMB shares instead, or export the storage from the incus host — README, NFS.",
+      "external": true,
+      "unavailable": "Exports are defined on the host, in /etc/exports.d/orion.exports. Mount <host>:/var/lib/incus/storage-pools/incus/custom/default_nas-data/Users/household with -t nfs4; the full recipe is in the README under NFS on the host.",
       "hint": "host export: /etc/exports.d/orion.exports"
     },
     {

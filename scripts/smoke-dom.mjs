@@ -287,13 +287,15 @@ const trashPane = {
 }
 const appsText = await at('#/apps')
 const unitCards = window.document.querySelectorAll('.store-card').length
-// NFS cannot run in this container, so its card has to say why, name where an
-// export would have to live, and must not offer an Install that can only fail.
+// NFS is exported by the host, not refused by it: the card has to say so, name
+// where the export lives, and must not offer an Install that can only fail.
 const nfsCard = [...window.document.querySelectorAll('.store-card')].find((card) =>
   card.textContent.includes('NFS server'),
 )
 const appsCatalogue = {
-  refusesNfs: Boolean(nfsCard) && nfsCard.textContent.includes('No NFS server can run'),
+  saysOnTheHost: Boolean(nfsCard) && nfsCard.textContent.includes('on the host'),
+  notCalledUnavailable:
+    Boolean(nfsCard) && !nfsCard.textContent.includes('unavailable'),
   noInstall: nfsCard
     ? ![...nfsCard.querySelectorAll('button')].some(
         (button) => button.textContent.trim() === 'Install',
@@ -419,7 +421,8 @@ const broken =
   summary.routes.serviceCards === 0 ||
   summary.routes.poolCards === 0 ||
   !summary.routes.servicesShowNginx ||
-  !summary.routes.appsCatalogue.refusesNfs ||
+  !summary.routes.appsCatalogue.saysOnTheHost ||
+  !summary.routes.appsCatalogue.notCalledUnavailable ||
   !summary.routes.appsCatalogue.noInstall ||
   !summary.routes.appsCatalogue.namesTheHost ||
   !summary.routes.generalShowsRuntime ||
