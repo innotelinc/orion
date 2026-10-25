@@ -47,6 +47,10 @@
   --shadow-pop: 0 30px 70px -20px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   --titlebar-h: 64px;
   --rail-w: 72px;
+  /* Space the navigation takes at the bottom of the window. Zero while the rail
+     is a column; at narrow widths it becomes a floating bar and every
+     viewport-sized panel has to stop above it. */
+  --rail-footprint: 0px;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --transition: 180ms var(--ease);
 }
@@ -2077,7 +2081,14 @@ dialog.palette-dialog[open] {
   }
   .shell {
     display: block;
-    padding: 16px 14px 96px;
+    /* The bar floats over the flow, so the page has to end above it: 62px of
+       bar, 12px inset, plus a gap for the last card to breathe. */
+    padding: 16px 14px calc(var(--rail-footprint) + 22px);
+  }
+  .toast-region {
+    right: 12px;
+    bottom: calc(var(--rail-footprint) + 14px);
+    width: calc(100vw - 24px);
   }
   .rail {
     position: fixed;
@@ -2093,6 +2104,9 @@ dialog.palette-dialog[open] {
     border-radius: 20px;
     z-index: 70;
     background: var(--surface-strong);
+  }
+  :root {
+    --rail-footprint: 74px;
   }
   .rail__group {
     flex-direction: row;
@@ -2176,11 +2190,6 @@ dialog.palette-dialog[open] {
   .modal__footer {
     padding-left: 16px;
     padding-right: 16px;
-  }
-  .toast-region {
-    right: 12px;
-    bottom: 88px;
-    width: calc(100vw - 24px);
   }
   .toast {
     padding-right: 30px;

@@ -1107,7 +1107,10 @@ html[data-theme='light'] .file-table thead th {
 @media (max-width: 940px) {
   .files-layout {
     grid-template-columns: minmax(0, 1fr);
-    height: calc(100dvh - 240px);
+    /* The navigation bar sits on top of this panel below 900px, so its height
+       and the gap below it come off the pane — otherwise the last rows of a
+       long folder scroll under the bar and cannot be clicked. */
+    height: calc(100dvh - 240px - var(--rail-footprint) - 8px);
     min-height: 520px;
   }
   .files-sidebar {
@@ -1161,7 +1164,7 @@ html[data-theme='light'] .file-table thead th {
 
 @media (max-width: 520px) {
   .files-layout {
-    height: calc(100dvh - 250px);
+    height: calc(100dvh - 250px - var(--rail-footprint) - 8px);
     min-height: 470px;
     border-radius: 16px;
   }
