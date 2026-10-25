@@ -62,6 +62,7 @@
         <a class="btn primary" id="signin" href="/auth/start?rd=%2Fapp%2F">Sign in</a>
         <a class="btn" id="access" href="https://app.magnate.innotel.us/signup?plan=orion">Get access — $10/month</a>
       </div>
+      <p class="note" id="notice" hidden style="border:1px solid #d9534f;border-radius:10px;padding:12px 14px;color:#ffb4ad"></p>
       <p class="note">Accounts, billing and cancellation live in <a href="https://app.magnate.innotel.us">Magnate</a> — one account and one bill for every Innotel service. Buying Orion creates your account and grants the <code>orion-users</code> role, so the desktop opens the next time you sign in. Already subscribed? Sign in on the left; Authentik hands you straight to the desktop.</p>
       <div class="grid">
         <article class="card">
@@ -81,6 +82,23 @@
     <footer>Part of the <a href="https://github.com/innotelinc/innotel-platform-stack">Innotel Platform Stack</a>. © 2026 Innotel Inc.</footer>
   </div>
   <script>
+    // Why a sign-in did not finish. The API sends the browser back here with a
+    // reason: "access" means the account is real but holds no Orion grant, and
+    // anything else is a round trip that broke. Saying which one it was is the
+    // difference between a person retrying and a person giving up.
+    (function () {
+      var reason = new URLSearchParams(window.location.search).get('error');
+      if (!reason) return;
+      var notice = document.getElementById('notice');
+      notice.textContent =
+        reason === 'access'
+          ? 'That account signed in, but it is not subscribed to Orion. Get access below — the purchase creates the account and grants it — or sign in with one that is.'
+          : reason === 'auth-unconfigured' || reason === 'auth-provider'
+            ? 'Sign-in is not set up on this machine, or the identity provider cannot be reached from it. Try again in a moment.'
+            : 'Sign-in did not finish. Nothing was changed — try again.';
+      notice.hidden = false;
+    })();
+
     // Someone who is already signed in should not be sent through Authentik
     // again. The API answers 401 to a caller with no session and 200 to one with
     // a session, so the button can name the desktop instead of the login.
