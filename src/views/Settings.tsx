@@ -713,7 +713,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                   <div>
                     <dt>Edge</dt>
                     <dd>
-                      <code>nas.innotel.us</code> → nginx on this host
+                      <code>orion.locker</code> → nginx on this host
                     </dd>
                   </div>
                   <div>
@@ -1012,7 +1012,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                   </div>
                   <div>
                     <dt>Access path</dt>
-                    <dd>nas.innotel.us → oauth2-proxy → Authentik → this host</dd>
+                    <dd>orion.locker → oauth2-proxy → Authentik → this host</dd>
                   </div>
                   <div>
                     <dt>Direct port 80</dt>
