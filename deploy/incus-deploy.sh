@@ -138,7 +138,10 @@ healthy=0
 # site; a deploy that rolled itself back over it is the bug being fixed here.
 for _ in $(seq 1 15); do
   sleep 2
-  if curl -fsS -m 5 http://127.0.0.1:8099/api/system >/dev/null &&
+  # /api/health, not /api/system: every /api/ call but the health one needs a
+  # session now that the public desktop is anonymous, so a probe without one
+  # would answer 401 on a perfectly healthy machine and roll the deploy back.
+  if curl -fsS -m 5 http://127.0.0.1:8099/api/health >/dev/null &&
      curl -fsS -m 5 http://127.0.0.1/health >/dev/null; then
     healthy=1
     break
@@ -159,4 +162,4 @@ fi
 # Keep the last two builds' worth of staging, drop the rest.
 find "$WORK" -maxdepth 1 -name 'stage.*' -mtime +1 -exec rm -rf {} + 2>/dev/null || true
 
-echo "deployed $VERSION ($SHORT) — $(curl -fsS -m 5 http://127.0.0.1:8099/api/system | head -c 0; echo ok)"
+echo "deployed $VERSION ($SHORT) — $(curl -fsS -m 5 http://127.0.0.1:8099/api/health | head -c 0; echo ok)"
