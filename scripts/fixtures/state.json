@@ -147,7 +147,8 @@
       "state": "exported by the host",
       "available": false,
       "external": true,
-      "unavailable": "Exports are defined on the host, in /etc/exports.d/orion.exports. Mount <host>:/var/lib/incus/storage-pools/incus/custom/default_nas-data/Users/household with -t nfs4; the full recipe is in the README under NFS on the host.",
+      "unavailable": "The incus host that owns this dataset exports it, not this container. Run the command on a Linux or macOS client.",
+      "command": "sudo mkdir -p /mnt/household && sudo mount -t nfs4 -o vers=4.2 192.168.1.51:/var/lib/incus/storage-pools/incus/custom/default_nas-data/Users/household /mnt/household",
       "hint": "host export: /etc/exports.d/orion.exports"
     },
     {

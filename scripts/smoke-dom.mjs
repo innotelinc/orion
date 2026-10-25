@@ -307,6 +307,16 @@ const appsCatalogue = {
       )
     : false,
   namesTheHost: Boolean(nfsCard) && nfsCard.textContent.includes('orion.exports'),
+  // The mount command is copyable from the card, so nobody retypes a dataset path.
+  mountCommand: Boolean(
+    nfsCard?.querySelector('.store-card__command code')?.textContent?.includes(
+      'mount -t nfs4',
+    ),
+  ),
+  copyButton: Boolean(nfsCard) &&
+    [...nfsCard.querySelectorAll('button')].some(
+      (button) => button.textContent.trim() === 'Copy',
+    ),
 }
 const storageText = await at('#/storage')
 const poolCards = window.document.querySelectorAll('.pool-card').length
@@ -431,6 +441,8 @@ const broken =
   !summary.routes.appsCatalogue.notCalledUnavailable ||
   !summary.routes.appsCatalogue.noInstall ||
   !summary.routes.appsCatalogue.namesTheHost ||
+  !summary.routes.appsCatalogue.mountCommand ||
+  !summary.routes.appsCatalogue.copyButton ||
   !summary.routes.generalShowsRuntime ||
   !summary.routes.aboutShowsBuild ||
   !summary.signOutOffered ||

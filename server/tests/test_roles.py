@@ -15,6 +15,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 API_PATH = Path(__file__).resolve().parents[1] / "orion-api.py"
 
@@ -1124,6 +1125,29 @@ class AppCatalogueTestCase(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.api.install_app("nfs")
         self.assertEqual(ran, [])
+
+    def test_the_card_carries_a_command_a_client_can_run(self):
+        with mock.patch.dict(os.environ, {"ORION_NFS_HOST": ""}, clear=False):
+            command = self._nfs()["command"]
+        self.assertEqual(
+            command,
+            "sudo mkdir -p /mnt/household && sudo mount -t nfs4 -o vers=4.2 "
+            "<host>:/var/lib/incus/storage-pools/incus/custom/default_nas-data/Users/household "
+            "/mnt/household",
+        )
+
+    def test_the_configured_host_is_filled_into_the_command(self):
+        # The container cannot see the host's address, so it is configuration,
+        # not something to guess from a gateway that is usually the router.
+        with mock.patch.dict(os.environ, {"ORION_NFS_HOST": "192.0.2.10"}, clear=False):
+            command = self._nfs()["command"]
+        self.assertIn("192.0.2.10:/var/lib/incus/", command)
+        self.assertNotIn("<host>", command)
+
+    def test_only_the_external_entry_carries_a_command(self):
+        self.assertEqual(
+            {app["id"] for app in self.api.apps_facts() if app["command"]}, {"nfs"}
+        )
 
     def test_the_host_remedy_is_on_the_card(self):
         self.assertEqual(

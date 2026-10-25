@@ -150,6 +150,8 @@ export interface AppEntry {
   available?: boolean
   /** True when the service is provided by the host that owns the storage, not this container. */
   external?: boolean
+  /** A command a client can run, when the service lives somewhere this host cannot install it. */
+  command?: string
   /** Why, in a sentence, when `available` is false. */
   unavailable?: string
   /** Where the thing actually runs, when this host cannot run it at all. */

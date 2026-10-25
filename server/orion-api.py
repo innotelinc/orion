@@ -127,9 +127,17 @@ APP_CATALOGUE: list[dict] = [
         "external": True,
         "available": False,
         "unavailable": (
-            "Exports are defined on the host, in /etc/exports.d/orion.exports. Mount "
-            "<host>:/var/lib/incus/storage-pools/incus/custom/default_nas-data/Users/household "
-            "with -t nfs4; the full recipe is in the README under NFS on the host."
+            "The incus host that owns this dataset exports it, not this container. Run the "
+            "command on a Linux or macOS client; if it still reads <host>, give the API the "
+            "host's address in ORION_NFS_HOST. Exports live in /etc/exports.d/orion.exports."
+        ),
+        # {host} is filled in by app_facts from ORION_NFS_HOST: the export path is
+        # on the host's dataset, so the command has to name the host, and nothing
+        # inside this container can discover that address on its own.
+        "command": (
+            "sudo mkdir -p /mnt/household && sudo mount -t nfs4 -o vers=4.2 "
+            "{host}:/var/lib/incus/storage-pools/incus/custom/default_nas-data/Users/household "
+            "/mnt/household"
         ),
         "hint": "host export: /etc/exports.d/orion.exports",
     },
@@ -1583,8 +1591,13 @@ def app_facts(app: dict) -> dict:
     )
     if external:
         active, state = True, "exported by the host"
+        # An empty ORION_NFS_HOST leaves the placeholder in place, which is
+        # honest: the command cannot name a machine this container cannot see.
+        host = os.environ.get("ORION_NFS_HOST", "").strip() or "<host>"
+        command = str(app.get("command", "")).replace("{host}", host)
     else:
         active, state = unit_state(app["unit"]) if installed else (False, "not installed")
+        command = ""
     return {
         "id": app["id"],
         "name": app["name"],
@@ -1599,6 +1612,7 @@ def app_facts(app: dict) -> dict:
         "available": available,
         "external": external,
         "unavailable": unavailable,
+        "command": command,
         "hint": str(app.get("hint", "")),
     }
 

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   ArrowRight,
+  Copy,
   Download,
   Loader2,
   Play,
@@ -125,6 +126,21 @@ export function AppStore({ navigate }: AppStoreProps) {
     }
   }
 
+  // A mount command is only useful if it can be pasted, so the card copies it
+  // whole rather than asking anyone to retype a dataset path.
+  const copyCommand = async (command: string) => {
+    try {
+      await navigator.clipboard.writeText(command)
+      pushToast({
+        title: 'Mount command copied',
+        description: 'Paste it into a terminal on the client.',
+        tone: 'success',
+      })
+    } catch {
+      pushToast({ title: 'Clipboard unavailable', description: command, tone: 'error' })
+    }
+  }
+
   const appCard = (app: AppEntry) => (
     <article key={app.id} className="store-card card">
       <header className="store-card__head">
@@ -156,6 +172,19 @@ export function AppStore({ navigate }: AppStoreProps) {
         <p className={app.external ? 'store-card__note' : 'store-card__unavailable'}>
           {app.unavailable}
         </p>
+      ) : null}
+      {app.command ? (
+        <div className="store-card__command">
+          <code>{app.command}</code>
+          <button
+            type="button"
+            className="button button--sm button--ghost"
+            onClick={() => void copyCommand(app.command as string)}
+          >
+            <Copy size={12} aria-hidden="true" />
+            Copy
+          </button>
+        </div>
       ) : null}
       {app.packages.length || app.unit ? (
         <div className="store-card__meta">

@@ -117,7 +117,9 @@ An entry that can never run here is marked `external` instead: **NFS server** is
 the only one, it names no package and no unit, `install` is refused before
 anything runs as root, and the store files it under **On the host** rather than
 **Available** — a badge reading *on the host* and a state of *exported by the
-host*, because the export is not missing, it is one machine up.
+host*, because the export is not missing, it is one machine up. It also carries
+the mount command itself, and `command` is that string with `ORION_NFS_HOST`
+substituted in (see below).
 
 ## NFS
 
@@ -176,6 +178,22 @@ A client mounts the real export path (NFS exports are paths, not aliases):
 ```sh
 mount -t nfs4 -o vers=4.2 192.168.1.51:/var/lib/incus/storage-pools/incus/custom/default_nas-data/Users/household /mnt/household
 ```
+
+The App Store card carries that whole command (with `mkdir -p`) behind a
+**Copy** button, so a client mounts without opening this file. The host's
+address is configuration: the container cannot see the machine it runs on, and
+guessing from the default gateway would name the router. Set it on the API —
+
+```sh
+mkdir -p /etc/systemd/system/orion-api.service.d
+cat >/etc/systemd/system/orion-api.service.d/nfs-host.conf <<'EOF'
+[Service]
+Environment=ORION_NFS_HOST=192.168.1.51
+EOF
+systemctl daemon-reload && systemctl restart orion-api
+```
+
+Without it the card reads `<host>` and copies the placeholder with it.
 
 The export survives a host reboot: `nfs-server` is enabled, and nfs-utils'
 own generator orders it after the incus volume's mount unit. A drop-in

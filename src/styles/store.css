@@ -427,6 +427,30 @@ html[data-theme='light'] .featured-card__label {
   line-height: 1.45;
   color: var(--text-muted);
 }
+/* A command long enough to leave the card: wrap it rather than truncate, and
+   keep the Copy button beside the first line so the pair reads as one control. */
+.store-card__command {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-3) 55%, transparent);
+}
+.store-card__command code {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: 'SFMono-Regular', 'Cascadia Code', Menlo, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.store-card__command .button {
+  flex: 0 0 auto;
+}
 .store-card__meta {
   display: flex;
   align-items: center;
