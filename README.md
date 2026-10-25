@@ -612,6 +612,7 @@ npm run build
 python3 -m unittest discover -s server/tests -v   # the role rules, on a temp data root
 npm run test:dom             # renders the built bundle in jsdom (fixtures or the container)
 ORION_SMOKE_FIXTURES=dir node scripts/smoke-dom.mjs   # same, from other system/state/metrics JSON
+npm run test:layout          # real Chromium: nothing unreachable behind the narrow bottom bar
 ```
 
 The smoke script reads `/api/system|state|metrics` from the container, or from
@@ -621,6 +622,17 @@ on a crash, an uncaught error, an API banner, or a page that rendered less than
 a paragraph. That is the check that catches the class of bug which took Settings
 down once already: a value read before its own declaration renders nothing and
 still typechecks, because the read sits inside a callback.
+
+`test:layout` covers what jsdom cannot see, because it lays nothing out: below
+900px the navigation rail becomes a floating bar, and a control under it is only
+a bug when the page cannot be scrolled far enough to bring it clear. It measures
+every control on every route and Settings tab at 660×900, 440×600 and 660×420,
+in document coordinates — including any scrolling inside the list that holds it —
+plus the Files pane, the toast area and the dialog footers. A toast 22px off the
+floor, inside the bar's 74px, is exactly the failure it was written from. It uses
+the installed Chrome (or Edge, or the bundled Chromium via
+`npx playwright-core install chromium`), so it needs no download on a machine
+that has a browser.
 
 ## Stack
 

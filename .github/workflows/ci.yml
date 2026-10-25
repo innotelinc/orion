@@ -15,7 +15,8 @@ concurrency:
 
 # The desktop is served from the nas container by nginx in front of
 # orion-api.py, so what CI can prove from here is that the bundle typechecks,
-# builds, and renders. The API's role rules are unit-tested against a temporary
+# builds and renders — and, in a real browser, that nothing at the bottom of a
+# page is left unclickable behind the narrow navigation bar. The API's role rules are unit-tested against a temporary
 # data root; the pages are rendered headlessly by scripts/smoke-dom.mjs against
 # the committed payloads in scripts/fixtures, so a view that throws on render
 # fails this workflow instead of the box.
@@ -44,6 +45,22 @@ jobs:
       # fails here. `dist/` is the build from the step above.
       - name: Render
         run: npm run test:dom
+
+      # A bar that floats over the page can hide the last control in a pane, and
+      # jsdom lays nothing out, so this one needs a real browser. The runner's
+      # Chrome is used when it is there; otherwise the matching Chromium is
+      # installed, which is the only download this job needs.
+      - name: Browser for the layout check
+        run: |
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "layout check: using the runner's Google Chrome"
+          else
+            version=$(node -p "require('playwright-core/package.json').version")
+            npx --yes "playwright@$version" install --with-deps chromium
+          fi
+
+      - name: Layout
+        run: npm run test:layout
 
   # Who may administer whom is the one part of the API that is pure logic, so it
   # is tested here rather than only on the box: every test builds a throwaway
