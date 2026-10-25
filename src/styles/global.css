@@ -652,6 +652,35 @@ kbd {
   background: var(--surface-3);
 }
 
+/* The desktop is public; this is the only control that starts a sign-in. */
+.signin-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  margin-left: 4px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  transition: border-color var(--transition), background var(--transition);
+}
+.signin-button:hover {
+  border-color: var(--accent);
+  background: var(--surface-3);
+}
+@media (max-width: 560px) {
+  .signin-button span {
+    display: none;
+  }
+  .signin-button {
+    padding: 0 8px;
+  }
+}
+
 .shell {
   position: relative;
   z-index: 1;

@@ -3,6 +3,7 @@ import {
   Bell,
   BellRing,
   CheckCheck,
+  LogIn,
   LogOut,
   Moon,
   Search,
@@ -13,7 +14,7 @@ import {
 import { useClickOutside } from '../hooks/useClickOutside'
 import { useApp } from '../context/AppContext'
 import { classNames } from '../lib/format'
-import { signOut } from '../lib/session'
+import { signIn, signOut } from '../lib/session'
 import { Avatar } from './ui/Avatar'
 import type { NavigateOptions, RouteName } from '../hooks/useRoute'
 import type { NotificationItem } from '../types'
@@ -235,19 +236,29 @@ export function TitleBar({ resolvedTheme, onToggleTheme, onOpenPalette, navigate
           )}
         </button>
         <NotificationsMenu navigate={navigate} />
-        <button
-          type="button"
-          className="profile-button"
-          onClick={() => navigate('settings', { tab: 'users' })}
-          aria-label={signedInAs ? `Open account settings for ${signedInAs}` : 'No edge session'}
-          title={signedInAs ?? 'No edge session'}
-        >
-          <Avatar
-            name={signedInAs ?? '?'}
-            color={currentUser?.color ?? '#64748b'}
-            size="sm"
-          />
-        </button>
+        {signedInAs ? (
+          <button
+            type="button"
+            className="profile-button"
+            onClick={() => navigate('settings', { tab: 'users' })}
+            aria-label={`Open account settings for ${signedInAs}`}
+            title={signedInAs}
+          >
+            <Avatar name={signedInAs} color={currentUser?.color ?? '#64748b'} size="sm" />
+          </button>
+        ) : (
+          /* No identity forwarded means no edge session: the desktop is public
+             and this is the only thing that asks for credentials. */
+          <button
+            type="button"
+            className="signin-button"
+            onClick={signIn}
+            title="Sign in with Authentik"
+          >
+            <LogIn size={15} aria-hidden="true" />
+            <span>Sign in</span>
+          </button>
+        )}
         {/* Always offered: ending the edge session works on the proxy cookie
             alone, and a session with no forwarded identity is exactly when a
             person cannot sign out anywhere else. */}
