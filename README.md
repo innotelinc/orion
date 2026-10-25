@@ -11,6 +11,8 @@ written through a small API, not invented in the browser.
 The design is reconstructed from the ZimaOS web UI captured over the Chrome
 DevTools Protocol at `127.0.0.1:9222`; the data is this machine's.
 
+> **Orion** is the StorageOps desktop for a single Incus container: the files on `/srv/storage`, the spaces people keep there, SMB shares, installable apps and the systemd units behind them, all read and written through a stdlib-only HTTP API rather than invented in the browser. Identity is not Orion's to hold — an Authentik-backed edge proxy forwards the signed-in address, and roles decide who may administer which space. Landing page: [innotelinc.github.io/orion](https://innotelinc.github.io/orion/).
+
 ## Why Orion
 
 | Problem | Answer |
