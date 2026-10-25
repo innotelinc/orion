@@ -20,9 +20,13 @@ vhost only accepts the edge proxy's address, so the port is never public.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import socket
@@ -80,6 +84,127 @@ AVAHI_SERVICE = Path("/etc/avahi/services/orion-smb.service")
 # wsdd ships no unit on Ubuntu, only the binary, so Orion writes this one.
 WSDD_UNIT = Path("/etc/systemd/system/wsdd.service")
 APT_TIMEOUT = 900
+
+# ── signing in ─────────────────────────────────────────────────────────────
+#
+# This service runs its own OIDC code flow rather than leaning on the edge
+# proxy's cookie. The proxy needs a CSRF cookie to survive a round trip through
+# the identity provider; a browser that will not keep one — a per-site cookie
+# setting, a redirect-chain heuristic, an extension — can never sign in, and it
+# fails as a bare 403 on a callback URL with nothing on screen to explain it.
+#
+# Here the state lives in this process, so the round trip needs no cookie at
+# all: the only cookie is the session, set once at the end of a login that has
+# already succeeded. nas.innotel.us still arrives through oauth2-proxy with the
+# address in a header; orion.locker arrives here directly with a session.
+OIDC_ISSUER = os.environ.get("ORION_OIDC_ISSUER", "").rstrip("/")
+OIDC_CLIENT_ID = os.environ.get("ORION_OIDC_CLIENT_ID", "")
+OIDC_CLIENT_SECRET = os.environ.get("ORION_OIDC_CLIENT_SECRET", "")
+OIDC_REDIRECT_URL = os.environ.get("ORION_OIDC_REDIRECT_URL", "")
+OIDC_SCOPE = os.environ.get("ORION_OIDC_SCOPE", "openid email profile groups")
+SESSION_SECRET = os.environ.get("ORION_SESSION_SECRET", "")
+SESSION_COOKIE = "orion_session"
+SESSION_TTL = 7 * 24 * 60 * 60
+# Who may sign in. Empty means "anyone the provider will authenticate", which is
+# only ever right for a test box.
+ALLOWED_GROUPS = [
+    group.strip()
+    for group in os.environ.get(
+        "ORION_ALLOWED_GROUPS", "Incus,Cerulean,authentik Admins,orion-users"
+    ).split(",")
+    if group.strip()
+]
+# A login in flight: state -> where it should land, and the PKCE verifier. Ten
+# minutes is one trip through a login form; nothing here outlives the process.
+PENDING_TTL = 600
+PENDING: dict[str, dict] = {}
+PENDING_LOCK = threading.Lock()
+DISCOVERY: dict[str, object] = {"at": 0.0, "doc": {}}
+
+
+def oidc_configured() -> bool:
+    return bool(
+        OIDC_ISSUER and OIDC_CLIENT_ID and OIDC_CLIENT_SECRET and OIDC_REDIRECT_URL
+        and SESSION_SECRET
+    )
+
+
+def oidc_discovery() -> dict:
+    """The provider's endpoints, cached for an hour."""
+    document = DISCOVERY.get("doc") or {}
+    if document and time.time() - float(DISCOVERY.get("at") or 0) < 3600:
+        return document  # type: ignore[return-value]
+    url = OIDC_ISSUER + "/.well-known/openid-configuration"
+    with urllib.request.urlopen(url, timeout=15) as response:
+        document = json.loads(response.read().decode())
+    DISCOVERY.update({"at": time.time(), "doc": document})
+    return document
+
+
+def b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode().rstrip("=")
+
+
+def unb64url(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def sign_session(claims: dict) -> str:
+    body = b64url(json.dumps(claims, separators=(",", ":")).encode())
+    mac = hmac.new(SESSION_SECRET.encode(), body.encode(), hashlib.sha256).digest()
+    return body + "." + b64url(mac)
+
+
+def read_session(sealed: str) -> dict | None:
+    """The claims in a session cookie, or None when it is not ours or has run out."""
+    if not sealed or "." not in sealed or not SESSION_SECRET:
+        return None
+    body, _, mac = sealed.partition(".")
+    expected = b64url(hmac.new(SESSION_SECRET.encode(), body.encode(), hashlib.sha256).digest())
+    if not hmac.compare_digest(mac, expected):
+        return None
+    try:
+        claims = json.loads(unb64url(body).decode())
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(claims, dict) or int(claims.get("exp") or 0) < time.time():
+        return None
+    return claims
+
+
+def session_cookie(value: str, max_age: int) -> str:
+    # Secure is unconditional: both public names are served over TLS by the edge,
+    # and a session is worth nothing on a plaintext connection anyway.
+    return (
+        f"{SESSION_COOKIE}={value}; Path=/; Max-Age={max_age}; "
+        "HttpOnly; Secure; SameSite=Lax"
+    )
+
+
+def safe_rd(value: str) -> str:
+    """A landing place on this site, or the desktop."""
+    candidate = (value or "").strip()
+    if not candidate.startswith("/") or candidate.startswith("//"):
+        return "/app/"
+    return candidate
+
+
+def display_name(handle: str) -> str:
+    """A name written the way its owner writes it.
+
+    preferred_username carries the person's display name when the provider is
+    configured to send one, and the bare handle otherwise. A name is already
+    written correctly; a handle is not, so only a single-word value is
+    title-cased: dhunter -> Dhunter, d.hunter -> D Hunter, David Hunter ->
+    unchanged.
+    """
+    if not handle:
+        return ""
+    if " " in handle:
+        return handle
+    words = [part for part in re.split(r"[._\-]+", handle) if part]
+    return " ".join(word.capitalize() for word in words) or handle
+
 
 try:
     import pwd
@@ -2933,21 +3058,41 @@ class Handler(BaseHTTPRequestHandler):
     def fail(self, message: str, status: int = 400) -> None:
         self.json({"error": message}, status)
 
+    def session_claims(self) -> dict | None:
+        """The claims this service signed into its own cookie, or None."""
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == SESSION_COOKIE:
+                return read_session(value.strip())
+        return None
+
     def identity(self) -> dict | None:
-        """Who the edge says is signed in, or None.
+        """Who is signed in, or None.
 
-        Two header families are accepted because the two ways of putting
-        oauth2-proxy in front of a service send different ones:
+        Two sources, in this order:
 
-        * `X-Forwarded-*` is what the proxy adds to the *upstream request* —
-          its `--pass-user-headers` flag. This is the path the estate uses.
-        * `X-Auth-Request-*` is only ever a *response* header, from
-          `--set-xauthrequest`, for nginx's auth_request mode. Kept because
-          other deployments front this app that way.
-
-        Reading only the second family is how the desktop spent a release
-        believing nobody was signed in while the proxy had the address.
+        * this service's own session, set by /auth/callback. That is how
+          orion.locker signs in: the round trip needs no cookie of its own, so
+          a browser that drops the edge proxy's CSRF cookie still works.
+        * the edge proxy's headers, for nas.innotel.us, which oauth2-proxy
+          still gates. Two families are accepted because the two ways of
+          putting a proxy in front send different ones: `X-Forwarded-*` is what
+          `--pass-user-headers` adds to the upstream request, while
+          `X-Auth-Request-*` is a `--set-xauthrequest` response header that
+          nginx's auth_request mode uses. Reading only the second is how the
+          desktop spent a release believing nobody was signed in while the
+          proxy had the address.
         """
+
+        session = self.session_claims()
+        if session:
+            handle = str(session.get("preferred") or "")
+            return {
+                "email": str(session.get("email") or ""),
+                "name": display_name(handle or str(session.get("email") or "").split("@")[0]),
+                "username": handle,
+                "groups": [str(group) for group in session.get("groups") or []],
+            }
 
         def header(*names: str) -> str:
             for name in names:
@@ -2968,17 +3113,7 @@ class Handler(BaseHTTPRequestHandler):
         preferred = header(
             "X-Auth-Request-Preferred-Username", "X-Forwarded-Preferred-Username"
         )
-        # preferred_username carries the person's display name when the provider
-        # is configured to send one (see deploy/sso/provision-authentik.py), and
-        # the bare handle otherwise. A name is already written the way its owner
-        # writes it; a handle is not, so only a single-word value is title-cased:
-        # dhunter -> Dhunter, d.hunter -> D Hunter, David Hunter -> unchanged.
-        handle = preferred or username or email.split("@")[0]
-        if " " in handle:
-            display = handle
-        else:
-            words = [part for part in re.split(r"[._\-]+", handle) if part]
-            display = " ".join(word.capitalize() for word in words) or handle
+        display = display_name(preferred or username or email.split("@")[0])
         groups: list[str] = []
         for value in header("X-Auth-Request-Groups", "X-Forwarded-Groups").split(","):
             group = value.strip()
@@ -3003,12 +3138,170 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("body must be an object")
         return payload
 
+    # -- signing in
+
+    def redirect(self, location: str, cookies: list[str] | None = None) -> None:
+        self.send_response(HTTPStatus.FOUND)
+        self.send_header("Location", location)
+        self.send_header("Cache-Control", "no-store")
+        for cookie in cookies or []:
+            self.send_header("Set-Cookie", cookie)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def auth_start(self) -> None:
+        """Begin a login: park the destination here, send the browser to the provider."""
+        if not oidc_configured():
+            self.redirect("/?error=auth-unconfigured")
+            return
+        verifier = secrets.token_urlsafe(48)
+        state = secrets.token_urlsafe(24)
+        now = time.time()
+        with PENDING_LOCK:
+            for key, value in list(PENDING.items()):
+                if float(value.get("exp") or 0) < now:
+                    PENDING.pop(key, None)
+            PENDING[state] = {
+                "rd": safe_rd(self.query().get("rd", "/app/")),
+                "verifier": verifier,
+                "exp": now + PENDING_TTL,
+            }
+        try:
+            document = oidc_discovery()
+        except (urllib.error.URLError, ValueError, OSError) as error:
+            print(f"sign-in unavailable: {error}", flush=True)
+            self.redirect("/?error=auth-provider")
+            return
+        params = {
+            "response_type": "code",
+            "client_id": OIDC_CLIENT_ID,
+            "redirect_uri": OIDC_REDIRECT_URL,
+            "scope": OIDC_SCOPE,
+            "state": state,
+            "code_challenge": b64url(hashlib.sha256(verifier.encode()).digest()),
+            "code_challenge_method": "S256",
+        }
+        authorize = str(document.get("authorization_endpoint") or "")
+        if not authorize:
+            self.redirect("/?error=auth-provider")
+            return
+        self.redirect(authorize + "?" + urllib.parse.urlencode(params))
+
+    def auth_callback(self) -> None:
+        """Finish a login the browser started here.
+
+        The state is looked up and consumed in this process, which is what makes
+        the exchange safe without a cookie: only a browser that was just sent to
+        the provider can come back with a state this service remembers.
+        """
+        query = self.query()
+        code = query.get("code", "")
+        with PENDING_LOCK:
+            pending = PENDING.pop(query.get("state", ""), None)
+        if not code or pending is None or float(pending.get("exp") or 0) < time.time():
+            self.redirect("/?error=signin")
+            return
+        try:
+            document = oidc_discovery()
+            exchange = urllib.request.Request(
+                str(document["token_endpoint"]),
+                data=urllib.parse.urlencode(
+                    {
+                        "grant_type": "authorization_code",
+                        "code": code,
+                        "redirect_uri": OIDC_REDIRECT_URL,
+                        "client_id": OIDC_CLIENT_ID,
+                        "client_secret": OIDC_CLIENT_SECRET,
+                        "code_verifier": pending["verifier"],
+                    }
+                ).encode(),
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json",
+                },
+            )
+            with urllib.request.urlopen(exchange, timeout=20) as response:
+                tokens = json.loads(response.read().decode())
+            userinfo = str(document.get("userinfo_endpoint") or OIDC_ISSUER + "/userinfo/")
+            # The claims come from userinfo over TLS with the token the provider
+            # just issued; there is no JWT to verify by hand, and nothing here
+            # reads an id_token.
+            profile_request = urllib.request.Request(
+                userinfo,
+                headers={
+                    "Authorization": "Bearer " + str(tokens.get("access_token") or ""),
+                    "Accept": "application/json",
+                },
+            )
+            with urllib.request.urlopen(profile_request, timeout=20) as response:
+                claims = json.loads(response.read().decode())
+        except (urllib.error.HTTPError, urllib.error.URLError, ValueError, OSError, KeyError) as error:
+            print(f"sign-in failed: {error}", flush=True)
+            self.redirect("/?error=signin")
+            return
+        email = str(claims.get("email") or "").strip().lower()
+        groups = [str(group).strip() for group in claims.get("groups") or [] if str(group).strip()]
+        if not email:
+            self.redirect("/?error=signin")
+            return
+        if ALLOWED_GROUPS and not set(groups) & set(ALLOWED_GROUPS):
+            print(f"sign-in refused for {email}: no allowed group in {groups}", flush=True)
+            self.redirect("/?error=access")
+            return
+        claims_out = {
+            "email": email,
+            "preferred": str(
+                claims.get("preferred_username") or claims.get("name") or email.split("@")[0]
+            ),
+            "groups": groups,
+            "exp": int(time.time()) + SESSION_TTL,
+        }
+        self.redirect(
+            safe_rd(str(pending.get("rd") or "/app/")),
+            [session_cookie(sign_session(claims_out), SESSION_TTL)],
+        )
+
+    def auth_logout(self) -> None:
+        """Drop this service's session, and the provider's too when it offers."""
+        cleared = [session_cookie("", 0)]
+        target = safe_rd(self.query().get("rd", "/"))
+        try:
+            ends = str(oidc_discovery().get("end_session_endpoint") or "")
+        except (urllib.error.URLError, ValueError, OSError):
+            ends = ""
+        if ends:
+            # Authentik's session outlives this cookie; without ending it the
+            # next sign-in is silent and the sign-out button looks broken.
+            self.redirect(ends + "?" + urllib.parse.urlencode({"client_id": OIDC_CLIENT_ID}), cleared)
+            return
+        self.redirect(target, cleared)
+
     # -- routes
+
+    def refuse_anonymous(self, route: str) -> bool:
+        """401 an /api/ call with no session; the desktop draws its lock screen."""
+        if not route.startswith("/api/") or route == "/api/health":
+            return False
+        if self.identity():
+            return False
+        self.json({"error": "sign-in required"}, HTTPStatus.UNAUTHORIZED)
+        return True
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlsplit(self.path)
         route = parsed.path.rstrip("/") or "/"
         try:
+            if route == "/auth/start":
+                self.auth_start()
+                return
+            if route == "/auth/callback":
+                self.auth_callback()
+                return
+            if route == "/auth/logout":
+                self.auth_logout()
+                return
+            if self.refuse_anonymous(route):
+                return
             if route in ("/health", "/api/health"):
                 facts = health_facts()
                 status = HTTPStatus.OK if facts["ok"] else HTTPStatus.SERVICE_UNAVAILABLE
@@ -3109,6 +3402,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         route = urllib.parse.urlsplit(self.path).path.rstrip("/") or "/"
         try:
+            if self.refuse_anonymous(route):
+                return
             if route == "/api/files/mkdir":
                 payload = self.body()
                 parent = safe_path(str(payload.get("parent", "/")))
@@ -3268,6 +3563,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         route = urllib.parse.urlsplit(self.path).path.rstrip("/") or "/"
         try:
+            if self.refuse_anonymous(route):
+                return
             if route == "/api/trash":
                 removed = empty_trash()
                 self.json({"ok": True, "removed": removed})

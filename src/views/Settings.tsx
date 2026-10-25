@@ -722,7 +722,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                   </div>
                   <div>
                     <dt>Sign-in</dt>
-                    <dd>oauth2-proxy in front of Authentik</dd>
+                    <dd>Authentik, run by this API at /auth/</dd>
                   </div>
                   <div>
                     <dt>Direct access</dt>
@@ -1012,7 +1012,7 @@ export function Settings({ activeTab, onTabChange }: SettingsProps) {
                   </div>
                   <div>
                     <dt>Access path</dt>
-                    <dd>orion.locker → oauth2-proxy → Authentik → this host</dd>
+                    <dd>orion.locker → Authentik → this host</dd>
                   </div>
                   <div>
                     <dt>Direct port 80</dt>

@@ -442,6 +442,7 @@ https://nas.innotel.us.
 | `/app/` | the built desktop (`/var/www/orion`) |
 | `/assets/` | fingerprinted bundles, cached for a year |
 | `/api/` | `orion-api` on `127.0.0.1:8099` |
+| `/auth/` | sign-in (`start`, `callback`, `logout`), also in `orion-api` |
 | `/health` | `ok` |
 
 `deploy/nas.innotel.us.conf` is the vhost. It accepts only the edge proxy
@@ -500,19 +501,51 @@ which works but leaves little headroom.
 
 The proxy forwards the signed-in address as `X-Forwarded-Email`. The API shows
 it as the current session, and the landing page's title bar prints it once
-`/api/system` answers. Settings → Users offers **Sign out**, and the
-landing page carries the same link in that bar, so signing out never requires
-opening the desktop. Both go to `/oauth2/sign_out` with Authentik's `end-session`
-flow as the redirect: clearing only the proxy cookie signs the browser straight
-back in, because the provider still remembers it.
+`/api/system` answers. Settings → Users offers **Sign out**, which goes to
+`/auth/logout` with Authentik's `end-session` flow as the redirect: clearing only
+our own cookie signs the browser straight back in, because the provider still
+remembers it.
 
 `orion.locker` is the public front door, and it opens on `locker.html`: an access
-page with **Sign in** (`/oauth2/start?rd=/app/`) and **Get access**, which points
+page with **Sign in** (`/auth/start?rd=/app/`) and **Get access**, which points
 at Magnate's signup for the `orion` plan. Buying that plan provisions the
-Authentik account and grants `orion-users` — the group this proxy lets in — so
+Authentik account and grants `orion-users` — a group this front door lets in — so
 the purchase *is* the access grant, and a cancellation removes the group again.
 The desktop itself lives at `/app/` and stays blurred until a session exists;
 nothing about the machine reaches an anonymous caller.
+
+#### orion.locker signs in through the API, not the proxy
+
+`orion.locker` reaches this vhost directly. The API runs the OIDC code flow
+itself (`/auth/start` → Authentik → `/auth/callback`) and keeps the state of a
+login in flight in memory, so the round trip needs **no cookie of ours**: the only
+cookie is the signed session, set once the login has already succeeded.
+
+That is deliberate. The proxy needs a CSRF cookie set on `/oauth2/start` to
+survive the trip through Authentik, and a browser that will not keep a cookie for
+that one site — a per-site "block cookies" setting, an extension, a redirect-chain
+heuristic — can never sign in. It fails as a bare 403 on the callback URL with
+nothing on screen to explain it, while a clean browser completes the same flow.
+The API's own flow has nothing to drop.
+
+| Where | Gate |
+| --- | --- |
+| `nas.innotel.us` | NPM → oauth2-proxy (`192.168.1.71:14016`) → this vhost; identity arrives as headers |
+| `orion.locker` | NPM → this vhost; the shell and the access page are public, `/api/` needs the session |
+
+It is configured by one file, read by the unit:
+
+| Key in `/etc/orion/api.env` | Meaning |
+| --- | --- |
+| `ORION_OIDC_ISSUER` | `https://auth.cerulean.innotel.us/application/o/orion/` |
+| `ORION_OIDC_CLIENT_ID`, `ORION_OIDC_CLIENT_SECRET` | the `Orion NAS` client |
+| `ORION_OIDC_REDIRECT_URL` | `https://orion.locker/auth/callback` — registered on the provider |
+| `ORION_ALLOWED_GROUPS` | comma-separated allow-list; empty lets in anyone the provider authenticates |
+| `ORION_SESSION_SECRET` | signs the session cookie; changing it signs everyone out |
+
+The file is optional (`EnvironmentFile=-`): without it the machine still serves
+and `nas.innotel.us` still works through the proxy's headers, and only
+`/auth/start` answers that it cannot sign anyone in.
 
 Three things about that chain fail quietly, so they are part of the deploy rather
 than something to rediscover:
