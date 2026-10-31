@@ -160,7 +160,11 @@ fi
 SESSION_SECRET=$(openssl rand -hex 32)
 CLAIM_SECRET=$(openssl rand -hex 32)
 
-TMP=$(mktemp -d)
+# Scratch space has to be on the data volume, not /tmp: the API runs under
+# systemd's ProtectSystem=strict and /tmp is read-only in that namespace.
+SCRATCH=${TMPDIR:-/srv/storage/.orion/tmp}
+mkdir -p "$SCRATCH"
+TMP=$(mktemp -d "$SCRATCH/provision.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
 cat > "$TMP/orion-api.service" <<UNIT

@@ -30,7 +30,9 @@ RestartSec=2
 User=root
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/srv/storage
+# /srv/storage is the queue and the provisioner's scratch space; the incus
+# client writes its cached server certificate beside its own certificate.
+ReadWritePaths=/srv/storage /etc/orion/incus
 NoNewPrivileges=false
 
 [Install]
