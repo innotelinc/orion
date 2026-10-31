@@ -88,13 +88,17 @@ incus info "$REMOTE:" >/dev/null || die "cannot reach the incus host '$REMOTE'"
 # -- the volume -------------------------------------------------------------
 # zfs takes a size directly. Other drivers may not, so a failure to set the
 # size is reported but does not lose an otherwise usable volume.
-if incus storage volume show "$REMOTE:$POOL/$VOLUME" >/dev/null 2>&1; then
+if incus storage volume show "$REMOTE:$POOL" "$VOLUME" >/dev/null 2>&1; then
   say "provision: volume $VOLUME exists; keeping its data"
   incus storage volume set "$REMOTE:$POOL" "$VOLUME" size="${SIZE_GB}GB" \
     || say "provision: could not restate $VOLUME's size (driver without quotas?)"
 else
-  incus storage volume create "$REMOTE:$POOL" "$VOLUME" --type=custom \
-    size="${SIZE_GB}GB" >/dev/null
+  # A custom volume is the default type. `size=` is a pool property: zfs
+  # honours it, a dir pool does not, so a driver that refuses the quota still
+  # gets a usable volume rather than a failed order.
+  incus storage volume create "$REMOTE:$POOL" "$VOLUME" \
+    size="${SIZE_GB}GB" >/dev/null 2>&1 \
+    || incus storage volume create "$REMOTE:$POOL" "$VOLUME" >/dev/null
   say "provision: created volume $VOLUME (${SIZE_GB}GB)"
 fi
 
@@ -175,6 +179,9 @@ Environment=ORION_PLAN=$PLAN
 Environment=ORION_STORAGE_GB=$SIZE_GB
 Environment=ORION_SESSION_SECRET=$SESSION_SECRET
 Environment=ORION_CLAIM_SECRET=$CLAIM_SECRET
+# This server answers on plain HTTP on the LAN until Cerulean gives it a name
+# and a certificate; a Secure cookie there is one the browser would discard.
+Environment=ORION_COOKIE_SECURE=0
 Restart=always
 RestartSec=2
 User=root
@@ -282,11 +289,18 @@ for _ in $(seq 1 30); do
 done
 [ "$serving" = "1" ] || die "$NAME started but its desktop does not answer /health"
 
-ADDRESS=$(incus list "$REMOTE:$NAME" --format csv -c 4 | head -n 1 | awk '{print $1}')
-[ -n "$ADDRESS" ] || ADDRESS=$(incus exec "$REMOTE:$NAME" -- hostname -I | awk '{print $1}')
+# `incus list <remote>:` takes a remote, not an instance, so ask it for the
+# table and pick this container out of it; the instance's own answer is the
+# fallback when the list has not caught up with the launch yet.
+ADDRESS=$(incus list "$REMOTE:" --format csv -c n,4 2>/dev/null \
+  | awk -F, -v want="$NAME" '$1 == want { print $2 }' | head -n 1 \
+  | awk '{ print $1 }')
+[ -n "$ADDRESS" ] || ADDRESS=$(incus exec "$REMOTE:$NAME" -- hostname -I | awk '{ print $1 }')
 [ -n "$ADDRESS" ] || die "$NAME has no address to hand out"
 
-SIGNIN=$(incus exec "$REMOTE:$NAME" -- \
+# The claim command signs with the container's own secret, which lives in its
+# unit rather than in this shell's environment.
+SIGNIN=$(incus exec "$REMOTE:$NAME" -- env ORION_CLAIM_SECRET="$CLAIM_SECRET" \
   python3 /opt/orion/orion-api.py --claim "$EMAIL" "http://$ADDRESS")
 
 # Exactly one JSON object on stdout; orion-api records it against the order.

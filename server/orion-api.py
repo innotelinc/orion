@@ -264,13 +264,22 @@ def read_session(sealed: str) -> dict | None:
     return claims
 
 
+# Secure is unconditional on the estate's public names: both are served over
+# TLS by the edge, and a session is worth nothing on a plaintext connection.
+# A container Orion provisions for one customer is reached on the LAN before
+# Cerulean gives it a name and a certificate, and a Secure cookie on plain HTTP
+# is a cookie the browser throws away — so that shape opts out explicitly,
+# with ORION_COOKIE_SECURE=0, rather than silently having no sign-in at all.
+COOKIE_SECURE = os.environ.get("ORION_COOKIE_SECURE", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+)
+
+
 def session_cookie(value: str, max_age: int) -> str:
-    # Secure is unconditional: both public names are served over TLS by the edge,
-    # and a session is worth nothing on a plaintext connection anyway.
-    return (
-        f"{SESSION_COOKIE}={value}; Path=/; Max-Age={max_age}; "
-        "HttpOnly; Secure; SameSite=Lax"
-    )
+    flags = "HttpOnly; SameSite=Lax" if not COOKIE_SECURE else "HttpOnly; Secure; SameSite=Lax"
+    return f"{SESSION_COOKIE}={value}; Path=/; Max-Age={max_age}; {flags}"
 
 
 def safe_rd(value: str) -> str:
