@@ -27,6 +27,20 @@ Billing, invoices and cancellation belong to Magnate. The page's buttons carry
 the SKU (`https://app.magnate.innotel.us/signup?plan=orion-general`), and the
 plan record in Magnate must use the same string.
 
+### The rows in Magnate
+
+The four SKUs above are registered as plans in Magnate's `plans` table
+(`service = 'orion'`, `authentik_group = 'orion-users'`, so buying one still
+grants the group this front door lets in). They carry the same prices and
+sizes as this catalogue. The older single `orion` plan at $10/month is left in
+place but deactivated, so it is no longer offered while the subscribers already
+on it keep their row.
+
+Registering the rows is what makes checkout work; it is not what makes
+provisioning work. **Magnate still has to POST a paid order to
+`/api/provision`** — until it does, a payment grants access to nothing and the
+order never reaches this machine's queue. The webhook contract is below.
+
 ## From payment to server
 
 ```
