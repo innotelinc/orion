@@ -97,7 +97,13 @@ mv "$SITE.new" "$SITE"
 install -m 0644 "$STAGE/web/landing/index.html" "$LANDING"
 # orion.locker's own front door: sign in, or get access through Magnate.
 install -m 0644 "$STAGE/web/landing/locker.html" "$ACCESS"
+# The subscription page quotes the API's catalogue, so it is installed beside
+# the landing pages rather than baked into the desktop bundle.
+install -m 0644 "$STAGE/web/landing/subscribe.html" /var/www/orion-landing/subscribe.html
 install -m 0644 "$STAGE/server/orion-api.py" "$API"
+# The provisioner is part of the deploy for the same reason the deployer is:
+# the next run must install the version that is on the branch, not an older one.
+install -m 0755 "$STAGE/deploy/provision-container.sh" /opt/orion/provision-container.sh
 install -m 0644 "$STAGE/deploy/orion-api.service" "$UNIT"
 
 # The vhost is replaced only when it changed, so a deploy does not reload nginx

@@ -1,6 +1,8 @@
 # Orion in the Innotel Platform Stack
 
-**Role: StorageOps** — A NAS desktop for one Incus container, wired to the machine it runs on.
+**Role: StorageOps** — A NAS desktop for one Incus container, and the service
+that provisions one per subscriber. Pick a size, pay, and Orion builds the
+container and its data volume.
 
 Part of the [Innotel Platform Stack](https://github.com/innotelinc/innotel-platform-stack).
 The canonical definition of the stack, its shared layers and their owners lives
@@ -15,6 +17,7 @@ there; this file records only what Orion does inside it.
 - the app store and service controls
 - SMB shares and storage views
 - the small read/write API
+- the subscription catalogue, paid-order intake and per-customer provisioning
 
 ### Consumes
 
@@ -33,7 +36,7 @@ there; this file records only what Orion does inside it.
 
 | Component | Technology | Job |
 | --- | --- | --- |
-| Orion | Node.js / TypeScript | A NAS desktop for one Incus container, wired to the machine it runs on. |
+| Orion | Node.js / TypeScript | A NAS desktop for one Incus container, and the provisioner for each subscriber's. |
 | Identity | Cerulean Authentik | Sign-in and role claims, where the repo has a UI |
 | Secrets | Cerulean Vault (KV v2) | Production credentials, referenced as `vault://` |
 | Trust | Cerulean | DNS, TLS and the public hostname |

@@ -50,6 +50,7 @@
       <span class="mark">O</span>
       <strong>Orion</strong>
       <nav>
+        <a href="/subscribe">Subscriptions</a>
         <a href="https://github.com/innotelinc/orion">GitHub</a>
         <a href="https://innotel.us">Innotel</a>
       </nav>
@@ -60,10 +61,10 @@
       <p class="lede">Orion is a desktop for one server: the files on its data volume, its spaces and shares, the apps it has installed and the systemd units that serve them. Everything you see is read from the machine, and every change is written to it.</p>
       <div class="cta">
         <a class="btn primary" id="signin" href="/auth/start?rd=%2Fapp%2F">Sign in</a>
-        <a class="btn" id="access" href="https://app.magnate.innotel.us/signup?plan=orion">Get access — $10/month</a>
+        <a class="btn" id="access" href="/subscribe">Choose a plan — from $5/month</a>
       </div>
       <p class="note" id="notice" hidden style="border:1px solid #d9534f;border-radius:10px;padding:12px 14px;color:#ffb4ad"></p>
-      <p class="note">Accounts, billing and cancellation live in <a href="https://app.magnate.innotel.us">Magnate</a> — one account and one bill for every Innotel service. Buying Orion creates your account and grants the <code>orion-users</code> role, so the desktop opens the next time you sign in. Already subscribed? Sign in on the left; Authentik hands you straight to the desktop.</p>
+      <p class="note">Orion is sold by the size: <a href="/subscribe">Trial, Starter, General and Storage</a>, from a free 1 GB trial to 100 GB. Each plan is your own server with its own data volume, built when the payment clears. Accounts, billing and cancellation live in <a href="https://app.magnate.innotel.us">Magnate</a> — one account and one bill for every Innotel service. Already subscribed? Sign in above; Authentik hands you straight to the desktop.</p>
       <div class="grid">
         <article class="card">
           <h3>Files that are really there.</h3>
@@ -111,26 +112,10 @@
       })
       .catch(function () {});
 
-    // The price is Magnate's, never this page's: the master dashboard is the one
-    // place a price is set, so the button reads what the plan actually costs and
-    // quotes it in the unit it is sold in. The static label above is the answer
-    // when the billing platform cannot be reached.
-    (function () {
-      var MAGNATE = 'https://app.magnate.innotel.us';
-      fetch(MAGNATE + '/api/plans?service=orion')
-        .then(function (r) { return r.ok ? r.json() : { plans: [] }; })
-        .then(function (d) {
-          var plan = (d && d.plans && d.plans[0]) || null;
-          if (!plan) return;
-          var button = document.getElementById('access');
-          var cents = plan.perUnit ? plan.pricePerUnitCents : plan.priceMonthlyCents;
-          var amount = cents % 100 === 0 ? String(cents / 100) : (cents / 100).toFixed(2);
-          var unit = plan.perUnit ? ' per ' + (plan.billingUnit || 'unit') : '/month';
-          button.textContent = 'Get access — $' + amount + unit;
-          button.setAttribute('href', MAGNATE + '/signup?plan=' + encodeURIComponent(plan.slug));
-        })
-        .catch(function () {});
-    })();
+    // There is more than one plan now, so this page stops guessing which one a
+    // visitor wants: it sends them to /subscribe, which reads Orion's own
+    // catalogue (`/api/plans`) and quotes every size it will actually build.
+    // One place sets a price, and that place is the API the provisioner reads.
   </script>
 </body>
 </html>

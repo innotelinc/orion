@@ -362,8 +362,9 @@ use the mDNS record instead.
 
 ## Deployment
 
-Two shapes are supported: a Docker container on a plain Linux server, and the
-Incus container that serves https://nas.innotel.us today.
+Three shapes are supported: a Docker container on a plain Linux server, the
+Incus container that serves https://nas.innotel.us today, and the containers
+Orion provisions for subscribers (see **Subscriptions** below).
 
 ### Docker on a Linux server
 
@@ -513,6 +514,29 @@ Authentik account and grants `orion-users` — a group this front door lets in �
 the purchase *is* the access grant, and a cancellation removes the group again.
 The desktop itself lives at `/app/` and stays blurred until a session exists;
 nothing about the machine reaches an anonymous caller.
+
+#### Subscriptions provision the server
+
+Orion sells a **personal NAS**, not a licence. `/subscribe` lists four plans —
+Trial (1 GB, free for 14 days), Starter (5 GB, $5/month), General (25 GB,
+$15/month) and Storage (100 GB, $45/month) — and each one is a container with a
+data volume of that size. The catalogue lives in `server/orion-api.py` and is
+served at `GET /api/plans`; the page renders from it and the provisioner reads
+the same record, so a plan cannot be sold at one size and built at another.
+
+A payment at Magnate becomes a `POST /api/provision` webhook signed with
+`ORION_PROVISION_SECRET`. The API records the order (keyed by the order id, so a
+retried delivery builds nothing twice) and a worker runs
+`deploy/provision-container.sh`: an Incus volume of the ordered size, a container
+with memory and CPU limits, that volume at `/srv/storage`, and nginx + orion-api
++ the desktop copied from this machine. The order's `result` then carries the
+container, address, SMB share and a one-time sign-in link (`/auth/claim`), which
+is how the buyer gets in before the container has a directory entry.
+
+`storageGb` is a ceiling: an order may ask for less than its plan and never for
+more. With no `ORION_PROVISION_SECRET` the endpoint answers 503 and provisions
+nothing. `docs/subscriptions.md` has the webhook contract, the environment and
+the Incus-client setup.
 
 #### orion.locker signs in through the API, not the proxy
 

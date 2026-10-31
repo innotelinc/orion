@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Orion subscriptions — a personal NAS, provisioned</title>
+  <meta name="description" content="Pick a size, pay, and Orion builds you a personal NAS: its own Incus container with a data volume of the size you bought. Trial, Starter, General and Storage.">
+  <meta name="theme-color" content="#0b0d10">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Orion NAS">
+  <meta property="og:title" content="Orion subscriptions — a personal NAS, provisioned">
+  <meta property="og:description" content="One price, one container, one data volume. Orion provisions the server when the payment clears.">
+  <meta property="og:url" content="https://orion.locker/subscribe">
+  <link rel="canonical" href="https://orion.locker/subscribe">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0d10'/%3E%3Ctext x='32' y='44' font-size='32' text-anchor='middle' fill='%2338bdf8'%3EO%3C/text%3E%3C/svg%3E">
+  <style>
+    :root { color-scheme: dark; --bg:#0b0d10; --panel:#12151a; --panel-2:#151a21; --line:#262c35; --text:#f4f7fb; --muted:#a8b2bf; --accent:#38bdf8; --good:#34d399; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif; line-height:1.6; }
+    a { color:var(--accent); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    .wrap { max-width:1080px; margin:0 auto; padding:0 24px; }
+    header { display:flex; align-items:center; gap:12px; height:64px; border-bottom:1px solid var(--line); }
+    .mark { display:grid; place-items:center; width:30px; height:30px; border:1px solid var(--line); border-radius:9px; font-weight:700; color:var(--accent); }
+    nav { margin-left:auto; display:flex; gap:16px; font-size:14px; }
+    main { padding:64px 0 40px; }
+    .kicker { color:var(--accent); text-transform:uppercase; letter-spacing:.08em; font-size:12px; margin:0; }
+    h1 { font-size:clamp(2rem,4.6vw,3rem); line-height:1.08; margin:10px 0 16px; letter-spacing:-.02em; }
+    h1 span { color:var(--accent); }
+    .lede { font-size:1.08rem; color:var(--muted); max-width:680px; margin:0 0 14px; }
+    .lede strong { color:var(--text); font-weight:600; }
+    .plans { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:16px; margin:40px 0 10px; }
+    .plan { position:relative; display:flex; flex-direction:column; gap:10px; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:22px 20px 20px; }
+    .plan--featured { border-color:#2f7fa8; background:linear-gradient(180deg,#12202b,var(--panel)); }
+    .badge { position:absolute; top:-11px; left:20px; background:var(--accent); color:#08121a; font-size:11px; font-weight:700; letter-spacing:.03em; padding:2px 9px; border-radius:999px; text-transform:uppercase; }
+    .plan h2 { margin:0; font-size:1.05rem; letter-spacing:.01em; }
+    .plan .tagline { margin:0; color:var(--muted); font-size:13px; min-height:38px; }
+    .size { display:flex; align-items:baseline; gap:8px; margin:4px 0 0; }
+    .size b { font-size:2rem; letter-spacing:-.02em; font-variant-numeric:tabular-nums; }
+    .size span { color:var(--muted); font-size:13px; }
+    .price { display:flex; align-items:baseline; gap:6px; }
+    .price b { font-size:1.5rem; letter-spacing:-.02em; font-variant-numeric:tabular-nums; }
+    .price span { color:var(--muted); font-size:13px; }
+    ul { list-style:none; padding:0; margin:6px 0 0; display:grid; gap:6px; }
+    li { position:relative; padding-left:20px; color:var(--muted); font-size:13px; }
+    li::before { content:""; position:absolute; left:2px; top:.55em; width:7px; height:7px; border-radius:50%; background:var(--good); opacity:.85; }
+    .plan .buy { margin-top:auto; display:block; text-align:center; border:1px solid var(--line); border-radius:9px; padding:10px 14px; color:var(--text); font-size:14px; font-weight:600; }
+    .plan .buy:hover { text-decoration:none; border-color:var(--accent); }
+    .plan--featured .buy { background:var(--accent); border-color:var(--accent); color:#08121a; }
+    .plan .buy small { display:block; font-weight:400; color:var(--muted); font-size:11px; margin-top:2px; }
+    .plan--featured .buy small { color:#0d2a38; }
+    .note { color:var(--muted); font-size:13px; max-width:760px; margin:0 0 10px; }
+    .note code { background:var(--panel); border:1px solid var(--line); border-radius:5px; padding:1px 5px; font-size:12px; }
+    .how { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin:44px 0 0; }
+    .step { background:var(--panel-2); border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+    .step b { display:block; font-size:13px; color:var(--accent); letter-spacing:.04em; text-transform:uppercase; margin-bottom:4px; }
+    .step p { margin:0; color:var(--muted); font-size:13px; }
+    footer { border-top:1px solid var(--line); margin-top:48px; padding:22px 0; color:var(--muted); font-size:13px; }
+    .notice { border:1px solid #d9534f; border-radius:10px; padding:12px 14px; color:#ffb4ad; font-size:13px; margin:0 0 12px; }
+    @media (max-width:520px) { .plan .tagline { min-height:0; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <span class="mark">O</span>
+      <strong>Orion</strong>
+      <nav>
+        <a href="/">Access</a>
+        <a href="https://innotel.us">Innotel</a>
+      </nav>
+    </header>
+
+    <main>
+      <p class="kicker">Subscriptions · personal NAS</p>
+      <h1>Pick a size. <span>Get a server.</span></h1>
+      <p class="lede">Orion is a NAS provisioning service: a plan is <strong>your own Incus container</strong> with a data volume of the size you buy, the desktop that browses it, and SMB shares for the machines on your network. Nothing is shared with another customer.</p>
+      <p class="lede">When the payment clears, Orion builds the container, attaches the volume at <code>/srv/storage</code>, installs the desktop and hands you a one-time sign-in link. It takes a couple of minutes, not a support ticket.</p>
+      <p class="notice" id="notice" hidden></p>
+
+      <section class="plans" id="plans" aria-label="Plans">
+        <!-- Rendered from the API's catalogue; the markup below is the same
+             four plans so the page is complete before the fetch lands. -->
+        <article class="plan">
+          <h2>Trial</h2>
+          <p class="tagline">A real container for a fortnight, no card.</p>
+          <p class="size"><b>1</b><span>GB of storage</span></p>
+          <p class="price"><b>$0</b><span>for 14 days</span></p>
+          <ul>
+            <li>One private container</li>
+            <li>Files, Trash, spaces</li>
+            <li>SMB share on your LAN</li>
+            <li>Upgrade without losing data</li>
+          </ul>
+          <a class="buy" data-plan="orion-trial" href="https://app.magnate.innotel.us/signup?plan=orion-trial">Start the trial<small>No card required</small></a>
+        </article>
+
+        <article class="plan">
+          <h2>Starter</h2>
+          <p class="tagline">Documents, photos and a share for the house.</p>
+          <p class="size"><b>5</b><span>GB of storage</span></p>
+          <p class="price"><b>$5</b><span>per month</span></p>
+          <ul>
+            <li>One private container</li>
+            <li>5 GB data volume</li>
+            <li>SMB + discovery</li>
+            <li>Cancel any time</li>
+          </ul>
+          <a class="buy" data-plan="orion-starter" href="https://app.magnate.innotel.us/signup?plan=orion-starter">Choose Starter</a>
+        </article>
+
+        <article class="plan plan--featured">
+          <span class="badge">Most chosen</span>
+          <h2>General</h2>
+          <p class="tagline">A working NAS: media, backups, projects.</p>
+          <p class="size"><b>25</b><span>GB of storage</span></p>
+          <p class="price"><b>$15</b><span>per month</span></p>
+          <ul>
+            <li>One private container</li>
+            <li>25 GB data volume</li>
+            <li>SMB + discovery</li>
+            <li>App store and services</li>
+          </ul>
+          <a class="buy" data-plan="orion-general" href="https://app.magnate.innotel.us/signup?plan=orion-general">Choose General</a>
+        </article>
+
+        <article class="plan">
+          <h2>Storage</h2>
+          <p class="tagline">The big volume, for backups that matter.</p>
+          <p class="size"><b>100</b><span>GB of storage</span></p>
+          <p class="price"><b>$45</b><span>per month</span></p>
+          <ul>
+            <li>One private container</li>
+            <li>100 GB data volume</li>
+            <li>SMB + discovery</li>
+            <li>Room to grow the volume</li>
+          </ul>
+          <a class="buy" data-plan="orion-storage" href="https://app.magnate.innotel.us/signup?plan=orion-storage">Choose Storage</a>
+        </article>
+      </section>
+
+      <p class="note">Prices and sizes come from Orion's own catalogue at <code>/api/plans</code> — the same record the provisioner reads, so the page can never sell a size the machine will not create. Billing, invoices and cancellation live in <a href="https://app.magnate.innotel.us">Magnate</a>: one account for every Innotel service.</p>
+      <p class="note">A plan sets a ceiling, not a floor: an order may ask for less than its plan's size and gets exactly that, but never more. Growing a volume later is a plan change, and the data stays where it is.</p>
+
+      <div class="how">
+        <article class="step">
+          <b>1 · Choose</b>
+          <p>Pick a plan here. The size on the card is the size of the volume your container gets.</p>
+        </article>
+        <article class="step">
+          <b>2 · Pay</b>
+          <p>Magnate takes the payment, creates your Innotel account and tells Orion the order is paid.</p>
+        </article>
+        <article class="step">
+          <b>3 · Provision</b>
+          <p>Orion creates the container and its volume, installs the desktop and sends the sign-in link.</p>
+        </article>
+      </div>
+    </main>
+
+    <footer>Part of the <a href="https://github.com/innotelinc/innotel-platform-stack">Innotel Platform Stack</a>. © 2026 Innotel Inc.</footer>
+  </div>
+
+  <script>
+    // The catalogue is the API's, not this page's. A failed fetch leaves the
+    // static cards alone: a visitor can still read what the plans cost, and the
+    // checkout links already carry the right SKUs.
+    (function () {
+      var notice = document.getElementById('notice');
+      fetch('/api/plans', { credentials: 'same-origin' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (data) {
+          if (!data || !Array.isArray(data.plans) || !data.plans.length) return;
+          var cards = document.querySelectorAll('.plan');
+          data.plans.forEach(function (plan, index) {
+            var card = cards[index];
+            if (!card) return;
+            var size = card.querySelector('.size b');
+            if (size) size.textContent = String(plan.storageGb);
+            var price = card.querySelector('.price b');
+            if (price) price.textContent = plan.priceCents === 0 ? '$0' : '$' + (plan.priceCents / 100).toFixed(plan.priceCents % 100 ? 2 : 0);
+            var unit = card.querySelector('.price span');
+            if (unit && plan.interval) {
+              unit.textContent = plan.trialDays ? 'for ' + plan.trialDays + ' days' : 'per ' + plan.interval;
+            }
+            var buy = card.querySelector('.buy');
+            if (buy && plan.checkoutUrl) {
+              buy.setAttribute('href', plan.checkoutUrl);
+              buy.setAttribute('data-plan', plan.sku);
+            }
+          });
+        })
+        .catch(function () {});
+    })();
+
+    // A checkout that came back without a completed order is the one thing a
+    // person needs told plainly.
+    (function () {
+      var reason = new URLSearchParams(window.location.search).get('error');
+      if (!reason) return;
+      var notice = document.getElementById('notice');
+      notice.textContent =
+        reason === 'unconfigured'
+          ? 'Provisioning is not switched on for this machine yet, so no server was created. Nothing was charged twice — contact support and we will finish the order.'
+          : reason === 'payment'
+            ? 'That payment did not complete, so nothing was provisioned. You can pick a plan again.'
+            : 'That order did not finish provisioning. Nothing was lost — try again, or contact support with your order number.';
+      notice.hidden = false;
+    })();
+  </script>
+</body>
+</html>

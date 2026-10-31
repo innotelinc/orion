@@ -31,6 +31,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 import unicodedata
@@ -84,6 +85,97 @@ AVAHI_SERVICE = Path("/etc/avahi/services/orion-smb.service")
 # wsdd ships no unit on Ubuntu, only the binary, so Orion writes this one.
 WSDD_UNIT = Path("/etc/systemd/system/wsdd.service")
 APT_TIMEOUT = 900
+
+# ── subscriptions ───────────────────────────────────────────────────────────
+#
+# Orion is sold as a personal NAS, not as a licence: a plan is one Incus
+# container with a data volume of the size the plan names. The catalogue lives
+# here — not in the page and not in the billing platform — so the page, the
+# order intake and the provisioner cannot disagree about what a plan costs or
+# how much storage it creates.
+#
+# `storageGb` is a ceiling, not a floor. An order may ask for less than its plan
+# (a 25 GiB plan ordered at 10 GiB gets 10 GiB) and never for more: growing past
+# the plan is a plan change, which is a different order.
+PLANS = [
+    {
+        "slug": "trial",
+        "name": "Trial",
+        "storageGb": 1,
+        "priceCents": 0,
+        "interval": "month",
+        "trialDays": 14,
+        "tagline": "A real container for a fortnight, no card.",
+        "features": [
+            "One private container",
+            "Files, Trash and spaces",
+            "SMB share on your LAN",
+            "Upgrade without losing data",
+        ],
+    },
+    {
+        "slug": "starter",
+        "name": "Starter",
+        "storageGb": 5,
+        "priceCents": 500,
+        "interval": "month",
+        "trialDays": 0,
+        "tagline": "Documents, photos and a share for the house.",
+        "features": [
+            "One private container",
+            "5 GB data volume",
+            "SMB and discovery",
+            "Cancel any time",
+        ],
+    },
+    {
+        "slug": "general",
+        "name": "General",
+        "storageGb": 25,
+        "priceCents": 1500,
+        "interval": "month",
+        "trialDays": 0,
+        "tagline": "A working NAS: media, backups, projects.",
+        "features": [
+            "One private container",
+            "25 GB data volume",
+            "SMB and discovery",
+            "App store and services",
+        ],
+    },
+    {
+        "slug": "storage",
+        "name": "Storage",
+        "storageGb": 100,
+        "priceCents": 4500,
+        "interval": "month",
+        "trialDays": 0,
+        "tagline": "The big volume, for backups that matter.",
+        "features": [
+            "One private container",
+            "100 GB data volume",
+            "SMB and discovery",
+            "Room to grow the volume",
+        ],
+    },
+]
+# Where a plan is actually bought. A slug is Orion's; the SKU is what Magnate is
+# asked for, and it is the same string the plan record carries.
+MAGNATE_URL = os.environ.get("ORION_BILLING_URL", "https://app.magnate.innotel.us").rstrip("/")
+# Paid orders arrive as a webhook from the billing platform, signed with this
+# secret. Without it provisioning stays off and says so: an unsigned order is
+# never a free server.
+PROVISION_SECRET = os.environ.get("ORION_PROVISION_SECRET", "")
+PROVISION_DIR = Path(os.environ.get("ORION_PROVISION_DIR", str(META / "provisioning")))
+PROVISION_SCRIPT = os.environ.get("ORION_PROVISION_SCRIPT", "/opt/orion/provision-container.sh")
+PROVISION_TIMEOUT = int(os.environ.get("ORION_PROVISION_TIMEOUT", "5400"))
+ORDER_LOCK = threading.Lock()
+ORDER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+# A container this API is *running in* was provisioned for one customer, and its
+# buyer needs a way in before an identity provider knows about that container.
+# The provisioner writes this secret and hands over a signed link, once.
+CLAIM_SECRET = os.environ.get("ORION_CLAIM_SECRET", "")
+CLAIM_TTL = 7 * 24 * 60 * 60
 
 # ── signing in ─────────────────────────────────────────────────────────────
 #
@@ -3028,6 +3120,314 @@ SAMPLER = Sampler()
 # ----------------------------------------------------------------- server
 
 
+# ── the catalogue, the orders, and the worker ──────────────────────────────
+
+
+def plan_sku(plan: dict) -> str:
+    """The string the billing platform sells a plan under."""
+    return "orion-" + plan["slug"]
+
+
+def plan_by_slug(slug: str) -> dict | None:
+    for plan in PLANS:
+        if plan["slug"] == slug:
+            return plan
+    return None
+
+
+def plans_facts() -> dict:
+    """The catalogue the page sells and the provisioner reads."""
+    return {
+        "billing": MAGNATE_URL,
+        "plans": [
+            {
+                **plan,
+                "sku": plan_sku(plan),
+                "price": round(plan["priceCents"] / 100, 2),
+                "checkoutUrl": f"{MAGNATE_URL}/signup?plan={plan_sku(plan)}",
+            }
+            for plan in PLANS
+        ],
+    }
+
+
+def subscription_facts() -> dict:
+    """What this container was sold as — empty on a self-hosted box."""
+    try:
+        size = int(os.environ.get("ORION_STORAGE_GB") or 0)
+    except ValueError:
+        size = 0
+    return {"plan": os.environ.get("ORION_PLAN", ""), "storageGb": size}
+
+
+def provision_ready() -> bool:
+    """Whether this machine may provision: a secret and a provisioner."""
+    return bool(PROVISION_SECRET) and Path(PROVISION_SCRIPT).is_file()
+
+
+def verify_provision_signature(payload: bytes, header: str) -> bool:
+    """Is this webhook body signed by the billing platform's shared secret?"""
+    if not PROVISION_SECRET or not header:
+        return False
+    given = header.split("=", 1)[1] if header.startswith("sha256=") else header
+    expected = hmac.new(PROVISION_SECRET.encode(), payload, hashlib.sha256).hexdigest()
+    return bool(given) and hmac.compare_digest(given.strip().lower(), expected)
+
+
+def claim_token(email: str, expires: int | None = None) -> str:
+    """A one-time sign-in token for a container nobody has an account on yet."""
+    if not CLAIM_SECRET:
+        return ""
+    until = int(expires or time.time() + CLAIM_TTL)
+    address = email.strip().lower()
+    # `~`, not `.`: an address has dots in it, and a token whose parts cannot be
+    # split back apart is a link nobody can use.
+    message = f"{until}~{address}"
+    mac = hmac.new(CLAIM_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
+    return f"{until}~{address}~{mac}"
+
+
+def read_claim(token: str) -> dict | None:
+    if not CLAIM_SECRET or token.count("~") != 2:
+        return None
+    expires, address, mac = token.split("~")
+    if not EMAIL_PATTERN.match(address):
+        return None
+    expected = hmac.new(
+            CLAIM_SECRET.encode(), f"{expires}~{address}".encode(), hashlib.sha256
+        ).hexdigest()
+    if not hmac.compare_digest(mac, expected):
+        return None
+    try:
+        if int(expires) < time.time():
+            return None
+    except ValueError:
+        return None
+    return {"email": address, "exp": int(expires)}
+
+
+def claim_url(email: str, base: str) -> str:
+    return f"{base.rstrip('/')}/auth/claim?token=" + urllib.parse.quote(claim_token(email))
+
+
+def order_path(order_id: str) -> Path:
+    return PROVISION_DIR / f"{order_id}.json"
+
+
+def read_order(order_id: str) -> dict | None:
+    try:
+        order = json.loads(order_path(order_id).read_text())
+    except (OSError, ValueError):
+        return None
+    return order if isinstance(order, dict) else None
+
+
+def write_order(order: dict) -> None:
+    """Record an order so a restart mid-build resumes instead of forgetting."""
+    PROVISION_DIR.mkdir(parents=True, exist_ok=True)
+    order["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    target = order_path(order["orderId"])
+    temporary = target.with_suffix(".tmp")
+    temporary.write_text(json.dumps(order, indent=2) + "\n")
+    temporary.replace(target)
+
+
+def list_orders(limit: int = 100) -> list[dict]:
+    orders: list[dict] = []
+    if not PROVISION_DIR.is_dir():
+        return orders
+    for path in PROVISION_DIR.glob("*.json"):
+        try:
+            order = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(order, dict) and order.get("orderId"):
+            orders.append(order)
+    orders.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)
+    return orders[:limit]
+
+
+def order_facts(order: dict) -> dict:
+    """The order as a caller may see it."""
+    return {
+        "orderId": order.get("orderId"),
+        "plan": order.get("plan"),
+        "planName": order.get("planName"),
+        "email": order.get("email"),
+        "sizeGb": order.get("sizeGb"),
+        "container": order.get("container"),
+        "status": order.get("status"),
+        "error": order.get("error") or "",
+        "createdAt": order.get("createdAt"),
+        "updatedAt": order.get("updatedAt"),
+        "finishedAt": order.get("finishedAt"),
+        "result": order.get("result"),
+    }
+
+
+def parse_order(payload: dict) -> dict:
+    """Turn a paid order into the record the provisioner will act on.
+
+    Everything the machine will create is decided here, once: the container's
+    name is derived from the order id, so a retried delivery cannot build a
+    second server, and the size is clamped to what was actually paid for.
+    """
+    order_id = str(payload.get("orderId") or "").strip()
+    if not ORDER_ID.match(order_id):
+        raise ValueError("orderId must be 1-64 letters, digits or ._:-")
+    if payload.get("paid") is not True:
+        raise ValueError("only a paid order can provision a server")
+    plan = plan_by_slug(str(payload.get("plan") or "").strip().lower())
+    if plan is None:
+        raise ValueError("unknown plan")
+    email = str(payload.get("email") or "").strip().lower()
+    if not EMAIL_PATTERN.match(email):
+        raise ValueError("email must be an address")
+    try:
+        requested = int(payload.get("storageGb") or plan["storageGb"])
+    except (TypeError, ValueError):
+        raise ValueError("storageGb must be a whole number of gigabytes")
+    if requested < 1:
+        raise ValueError("storageGb must be at least 1")
+    size = min(requested, plan["storageGb"])
+    digest = hashlib.sha256(order_id.encode()).hexdigest()[:8]
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return {
+        "orderId": order_id,
+        "plan": plan["slug"],
+        "planName": plan["name"],
+        "email": email,
+        "requestedGb": requested,
+        "sizeGb": size,
+        "container": f"orion-{plan['slug']}-{digest}",
+        "volume": f"orion-{plan['slug']}-{digest}",
+        "status": "queued",
+        "createdAt": stamp,
+        "updatedAt": stamp,
+        "error": "",
+        "result": None,
+        "log": "",
+    }
+
+
+def queue_order(payload: dict) -> tuple[dict, bool]:
+    """Record a paid order once. Returns the order and whether it is new."""
+    order = parse_order(payload)
+    with ORDER_LOCK:
+        existing = read_order(order["orderId"])
+        # A billing platform retries a webhook it did not hear back from. The
+        # same order id is the same server, not a second one. Only an order
+        # that failed may be retried, and only when asked explicitly.
+        if existing and not (
+            existing.get("status") == "failed" and payload.get("retry") is True
+        ):
+            return existing, False
+        if existing:
+            order["createdAt"] = existing.get("createdAt") or order["createdAt"]
+        write_order(order)
+        return order, True
+
+
+def claim_next_order() -> dict | None:
+    """The oldest queued order, marked running, or None."""
+    with ORDER_LOCK:
+        queued = [order for order in list_orders(500) if order.get("status") == "queued"]
+        if not queued:
+            return None
+        order = sorted(queued, key=lambda item: str(item.get("createdAt") or ""))[0]
+        order["status"] = "running"
+        order["startedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        write_order(order)
+        return order
+
+
+def finish_order(
+    order: dict, status: str, error: str = "", result: dict | None = None, log: str = ""
+) -> dict:
+    with ORDER_LOCK:
+        order["status"] = status
+        order["error"] = error
+        if result is not None:
+            order["result"] = result
+        order["log"] = (log or "")[-4000:]
+        if status in ("ready", "failed"):
+            order["finishedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        write_order(order)
+        return order
+
+
+def run_provision(order: dict) -> None:
+    """Build one customer's server, and record how it went."""
+    command = [
+        PROVISION_SCRIPT,
+        "--name",
+        order["container"],
+        "--volume",
+        order["volume"],
+        "--size-gb",
+        str(order["sizeGb"]),
+        "--plan",
+        order["plan"],
+        "--email",
+        order["email"],
+    ]
+    try:
+        completed = subprocess.run(
+            command, capture_output=True, text=True, timeout=PROVISION_TIMEOUT
+        )
+    except FileNotFoundError:
+        finish_order(
+            order, "failed", error=f"the provisioner is not installed at {PROVISION_SCRIPT}"
+        )
+        return
+    except subprocess.TimeoutExpired:
+        finish_order(
+            order, "failed", error=f"the provisioner did not finish in {PROVISION_TIMEOUT}s"
+        )
+        return
+    except (OSError, subprocess.SubprocessError) as error:
+        finish_order(order, "failed", error=f"the provisioner could not run: {error}")
+        return
+    log = (completed.stdout or "") + (completed.stderr or "")
+    if completed.returncode != 0:
+        finish_order(
+            order,
+            "failed",
+            error=f"the provisioner exited {completed.returncode}",
+            log=log,
+        )
+        return
+    # The provisioner prints one JSON object on stdout; diagnostics go to
+    # stderr, so the last JSON line is the result even when apt was chatty.
+    result = None
+    for line in reversed((completed.stdout or "").strip().splitlines()):
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(stripped)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            result = parsed
+            break
+    finish_order(order, "ready", result=result, log=log)
+
+
+def provision_worker() -> None:
+    """Build queued servers, one at a time, and outlive a bad order."""
+    while True:
+        try:
+            order = claim_next_order()
+            if order is None:
+                time.sleep(5)
+                continue
+            run_provision(order)
+        except Exception as error:  # noqa: BLE001 - one bad order must not stop the loop
+            print(f"provisioning loop: {error}", flush=True)
+            time.sleep(5)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "orion-api"
     sys_version = ""
@@ -3137,6 +3537,18 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             raise ValueError("body must be an object")
         return payload
+
+    def raw_body(self) -> bytes:
+        """The request body as bytes, before JSON parsing.
+
+        A webhook signature covers what was sent, so the bytes have to be read
+        once and verified before anything is allowed to interpret them. Reading
+        and re-serialising the JSON would change the bytes and break the check.
+        """
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            return b""
+        return self.rfile.read(length)
 
     # -- signing in
 
@@ -3276,11 +3688,104 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.redirect(target, cleared)
 
+    def auth_claim(self) -> None:
+        """Turn the one-time link a provisioned server was handed into a session.
+
+        A container built for one customer has no directory entry of its own at
+        the moment it is created, and inventing a second account table is worse
+        than handing over a link that expires. The token names the address and
+        an expiry and is signed with the container's own secret, so it is the
+        same check `--claim` prints and nothing a browser can forge.
+        """
+        claims = read_claim(self.query().get("token", ""))
+        if claims is None:
+            self.redirect("/?error=signin")
+            return
+        session = {
+            "email": claims["email"],
+            "preferred": claims["email"].split("@")[0],
+            "groups": ["orion-users"],
+            "exp": int(time.time()) + SESSION_TTL,
+        }
+        self.redirect("/app/", [session_cookie(sign_session(session), SESSION_TTL)])
+
+    def provision_intake(self) -> None:
+        """Take one paid order from the billing platform, and queue it.
+
+        Nothing is provisioned on this request: a container takes minutes to
+        build and a webhook has seconds. The order is recorded first, so a
+        retried delivery — which every billing platform does — returns the same
+        order instead of building a second server for one payment.
+        """
+        if not provision_ready():
+            self.json(
+                {"error": "provisioning is not configured on this machine"},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        raw = self.raw_body()
+        if not verify_provision_signature(raw, self.headers.get("X-Orion-Signature") or ""):
+            self.fail("bad signature", HTTPStatus.UNAUTHORIZED)
+            return
+        try:
+            payload = json.loads(raw or b"{}")
+        except ValueError:
+            self.fail("body must be JSON")
+            return
+        if not isinstance(payload, dict):
+            self.fail("body must be an object")
+            return
+        order, created = queue_order(payload)
+        status = HTTPStatus.ACCEPTED if created else HTTPStatus.OK
+        self.json({"ok": True, "created": created, "order": order_facts(order)}, status)
+
+    def provision_status(self, route: str) -> None:
+        """What happened to an order — for the billing platform and the buyer.
+
+        A caller with the shared secret may ask about any order. A signed-in
+        person may ask about their own, which is what the page after checkout
+        needs; nobody else learns another customer's address or server.
+        """
+        tail = route[len("/api/provision") :].strip("/")
+        session = session_facts(self.identity())
+        secret = self.headers.get("X-Orion-Secret") or ""
+        trusted = bool(secret) and bool(PROVISION_SECRET) and hmac.compare_digest(
+            secret, PROVISION_SECRET
+        )
+        if not tail:
+            if not trusted:
+                self.fail("sign in, or send X-Orion-Secret", HTTPStatus.UNAUTHORIZED)
+                return
+            self.json({"orders": [order_facts(order) for order in list_orders()]})
+            return
+        order = read_order(urllib.parse.unquote(tail))
+        if order is None:
+            self.fail("no such order", HTTPStatus.NOT_FOUND)
+            return
+        permissions = session.get("permissions") or {}
+        usable = (
+            trusted
+            or (
+                bool(session.get("email"))
+                and str(session["email"]).lower() == str(order.get("email")).lower()
+            )
+            or permissions.get("scope") == "all"
+        )
+        if not usable:
+            self.fail("sign in as the buyer, or send X-Orion-Secret", HTTPStatus.UNAUTHORIZED)
+            return
+        self.json(order_facts(order))
+
     # -- routes
 
     def refuse_anonymous(self, route: str) -> bool:
         """401 an /api/ call with no session; the desktop draws its lock screen."""
         if not route.startswith("/api/") or route == "/api/health":
+            return False
+        # Public pricing, and the two provisioning paths. Those authenticate
+        # themselves with a shared-secret signature rather than a browser
+        # session, and a 401 here would only hide why an order was refused.
+        if route in ("/api/plans", "/api/provision") or route.startswith("/api/provision/"):
             return False
         if self.identity():
             return False
@@ -3300,6 +3805,9 @@ class Handler(BaseHTTPRequestHandler):
             if route == "/auth/logout":
                 self.auth_logout()
                 return
+            if route == "/auth/claim":
+                self.auth_claim()
+                return
             if self.refuse_anonymous(route):
                 return
             if route in ("/health", "/api/health"):
@@ -3313,6 +3821,12 @@ class Handler(BaseHTTPRequestHandler):
                     self.json(facts, status)
                 else:
                     self.page(render_health_page(facts), status)
+                return
+            if route == "/api/plans":
+                self.json(plans_facts())
+                return
+            if route == "/api/provision" or route.startswith("/api/provision/"):
+                self.provision_status(route)
                 return
             if route == "/api/metrics":
                 self.json(SAMPLER.snapshot())
@@ -3331,6 +3845,7 @@ class Handler(BaseHTTPRequestHandler):
                         "network": network_facts(),
                         "storageRoot": str(ROOT),
                         "version": version_facts(),
+                        "subscription": subscription_facts(),
                         "identity": identity,
                         "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     }
@@ -3403,6 +3918,9 @@ class Handler(BaseHTTPRequestHandler):
         route = urllib.parse.urlsplit(self.path).path.rstrip("/") or "/"
         try:
             if self.refuse_anonymous(route):
+                return
+            if route == "/api/provision":
+                self.provision_intake()
                 return
             if route == "/api/files/mkdir":
                 payload = self.body()
@@ -3633,10 +4151,27 @@ def reconcile_installed_apps() -> None:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "--claim":
+        # Print the one-time sign-in link for a server this container was
+        # provisioned for. The provisioner runs this inside the new container,
+        # so the secret never leaves it.
+        email = (sys.argv[2] if len(sys.argv) > 2 else "").strip().lower()
+        base = sys.argv[3] if len(sys.argv) > 3 else "http://127.0.0.1"
+        if not email or not CLAIM_SECRET:
+            print(
+                "usage: orion-api.py --claim <email> [base-url] "
+                "(needs ORION_CLAIM_SECRET)",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+        print(claim_url(email, base))
+        return
     META.mkdir(parents=True, exist_ok=True)
     TRASH.mkdir(parents=True, exist_ok=True)
     SAMPLER.start()
     threading.Thread(target=reconcile_installed_apps, daemon=True, name="reconcile").start()
+    if provision_ready():
+        threading.Thread(target=provision_worker, daemon=True, name="provision").start()
     server = ThreadingHTTPServer((BIND, PORT), Handler)
     print(f"orion-api listening on {BIND}:{PORT}, root {ROOT}", flush=True)
     server.serve_forever()

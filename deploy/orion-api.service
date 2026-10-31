@@ -15,6 +15,15 @@ Environment=ORION_PORT=8099
 # edge proxy's headers for nas.innotel.us, and only /auth/start says it cannot
 # sign anyone in.
 EnvironmentFile=-/etc/orion/api.env
+# Subscriptions. The secret this machine accepts paid orders with is in the
+# env file above, not here; with no secret the order intake answers 503 and
+# says so rather than provisioning anything for free.
+Environment=ORION_PROVISION_SCRIPT=/opt/orion/provision-container.sh
+# The incus host the provisioned containers live on, and the client config that
+# holds this machine's certificate for it. Both are read by
+# provision-container.sh, which is the only thing that talks to incus.
+Environment=ORION_INCUS_REMOTE=i1
+Environment=INCUS_CONF=/etc/orion/incus/config
 Restart=always
 RestartSec=2
 # The file operations write the data volume; service control calls systemctl.
