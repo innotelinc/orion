@@ -161,7 +161,7 @@ PLANS = [
 ]
 # Where a plan is actually bought. A slug is Orion's; the SKU is what Magnate is
 # asked for, and it is the same string the plan record carries.
-MAGNATE_URL = os.environ.get("ORION_BILLING_URL", "https://app.magnate.innotel.us").rstrip("/")
+MAGNATE_URL = os.environ.get("ORION_BILLING_URL", "https://magnate.innotel.us").rstrip("/")
 # Paid orders arrive as a webhook from the billing platform, signed with this
 # secret. Without it provisioning stays off and says so: an unsigned order is
 # never a free server.
